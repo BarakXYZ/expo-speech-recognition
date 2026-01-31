@@ -140,9 +140,10 @@ struct SpeechAnalyzerAssetInfo {
 // MARK: - Delegate Protocol
 
 /// Callbacks for speech recognition events
+/// Note: For legacy engine, result/error types match SFSpeechRecognizer directly for full compatibility
 protocol SpeechRecognitionEngineDelegate: AnyObject {
-  func onResult(_ result: UnifiedTranscriptionResult)
-  func onError(_ error: SpeechRecognitionEngineError)
+  func onResult(_ result: SFSpeechRecognitionResult)
+  func onError(_ error: Error)
   func onStart()
   func onSpeechStart()
   func onSpeechEnd()
@@ -183,7 +184,8 @@ protocol SpeechRecognitionEngine: Actor {
   func supports(feature: SpeechRecognitionFeature) -> Bool
 
   /// Start recognition with the given options
-  func start(
+  /// Note: This method runs on MainActor because audio session setup requires main thread
+  @MainActor func start(
     options: SpeechRecognitionOptions,
     delegate: SpeechRecognitionEngineDelegate
   ) async throws

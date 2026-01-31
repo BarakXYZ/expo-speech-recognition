@@ -32,9 +32,9 @@ struct TranscriptionResult {
   }
 }
 
-public class ExpoSpeechRecognitionModule: Module {
+public class ExpoSpeechRecognitionModule: Module, SpeechRecognitionEngineDelegate {
 
-  var speechRecognizer: ExpoSpeechRecognizer?
+  var speechRecognizer: (any SpeechRecognitionEngine)?
 
   // Hack for iOS 18 to detect final results
   // See: https://forums.developer.apple.com/forums/thread/762952 for more info
@@ -48,6 +48,9 @@ public class ExpoSpeechRecognitionModule: Module {
   //   { isFinal: true, transcripts: [] }
   // ]
   var previousResult: SFSpeechRecognitionResult?
+
+  // Store options for result handling
+  var currentMaxAlternatives: Int = 5
 
   public func definition() -> ModuleDefinition {
     // Sets the name of the module that JavaScript code will use to refer to the module. Takes a string as an argument.
@@ -95,7 +98,11 @@ public class ExpoSpeechRecognitionModule: Module {
       // Called when the language detection (and switching) results are available.
       "languagedetection",
       // Fired when the input volume changes
-      "volumechange"
+      "volumechange",
+      // Fired when engine is selected (iOS 26+)
+      "engineselected",
+      // Fired when SpeechAnalyzer assets are required but not installed (iOS 26+)
+      "assetrequired"
     )
 
     OnCreate {
@@ -178,6 +185,7 @@ public class ExpoSpeechRecognitionModule: Module {
 
           // Reset the previous result
           self.previousResult = nil
+          self.currentMaxAlternatives = options.maxAlternatives
 
           // Re-create the speech recognizer when locales change
           if self.speechRecognizer == nil || currentLocale != options.lang {
@@ -193,8 +201,10 @@ public class ExpoSpeechRecognitionModule: Module {
               return
             }
 
-            self.speechRecognizer = try await ExpoSpeechRecognizer(
-              locale: locale
+            // Use the factory to create the engine
+            self.speechRecognizer = try await SpeechRecognitionEngineFactory.createEngine(
+              locale: locale,
+              options: options
             )
           }
 
@@ -216,43 +226,10 @@ public class ExpoSpeechRecognitionModule: Module {
             return
           }
 
-          // Start recognition!
-          await speechRecognizer?.start(
+          // Start recognition using the engine's delegate-based API
+          try await speechRecognizer?.start(
             options: options,
-            resultHandler: { [weak self] result in
-              self?.handleRecognitionResult(result, maxAlternatives: options.maxAlternatives)
-            },
-            errorHandler: { [weak self] error in
-              self?.handleRecognitionError(error)
-            },
-            endHandler: { [weak self] in
-              self?.handleEnd()
-            },
-            startHandler: { [weak self] in
-              self?.sendEvent("start")
-            },
-            speechStartHandler: { [weak self] in
-              self?.sendEvent("speechstart")
-            },
-            audioStartHandler: { [weak self] filePath in
-              if let filePath: String {
-                let uri = filePath.hasPrefix("file://") ? filePath : "file://" + filePath
-                self?.sendEvent("audiostart", ["uri": uri])
-              } else {
-                self?.sendEvent("audiostart", ["uri": nil])
-              }
-            },
-            audioEndHandler: { [weak self] filePath in
-              if let filePath: String {
-                let uri = filePath.hasPrefix("file://") ? filePath : "file://" + filePath
-                self?.sendEvent("audioend", ["uri": uri])
-              } else {
-                self?.sendEvent("audioend", ["uri": nil])
-              }
-            },
-            volumeChangeHandler: { [weak self] value in
-              self?.sendEvent("volumechange", ["value": value])
-            }
+            delegate: self
           )
         } catch {
           self.sendEvent(
@@ -407,7 +384,130 @@ public class ExpoSpeechRecognitionModule: Module {
         "packageName": ""
       ]
     }
+
+    // MARK: - iOS 26+ SpeechAnalyzer Functions (stub implementations for now)
+
+    AsyncFunction("getSpeechAnalyzerAssetStatus") { (locale: String, promise: Promise) in
+      // Phase 4 will implement this
+      // For now, return "not_available" since we're on pre-iOS 26
+      promise.resolve([
+        "locale": locale,
+        "status": "not_available",
+        "progress": nil,
+      ] as [String: Any?])
+    }
+
+    AsyncFunction("downloadSpeechAnalyzerAsset") { (locale: String, promise: Promise) in
+      // Phase 4 will implement this
+      promise.resolve([
+        "status": "download_started",
+        "locale": locale,
+      ])
+    }
+
+    AsyncFunction("getSpeechAnalyzerLocales") { (promise: Promise) in
+      // Phase 4 will implement this
+      promise.resolve([] as [[String: Any]])
+    }
+
+    AsyncFunction("getPreferredEngine") {
+      (options: [String: Any]?, promise: Promise) in
+      let locale = options?["locale"] as? String
+      let iosForceLegacyEngine = options?["iosForceLegacyEngine"] as? Bool ?? false
+
+      // Use the factory to determine which engine would be selected
+      var recognitionOptions: SpeechRecognitionOptions? = nil
+      if iosForceLegacyEngine {
+        recognitionOptions = SpeechRecognitionOptions()
+        // Note: We'd set iosForceLegacyEngine here but it's handled by the factory logic
+      }
+
+      let info = SpeechRecognitionEngineFactory.getPreferredEngine(
+        locale: locale,
+        options: recognitionOptions
+      )
+
+      promise.resolve([
+        "engine": info.engine.rawValue,
+        "reason": info.reason.rawValue,
+      ])
+    }
   }
+
+  // MARK: - SpeechRecognitionEngineDelegate
+
+  func onResult(_ result: SFSpeechRecognitionResult) {
+    handleRecognitionResult(result, maxAlternatives: currentMaxAlternatives)
+  }
+
+  func onError(_ error: Error) {
+    handleRecognitionError(error)
+  }
+
+  func onStart() {
+    sendEvent("start")
+  }
+
+  func onSpeechStart() {
+    sendEvent("speechstart")
+  }
+
+  func onSpeechEnd() {
+    sendEvent("speechend")
+  }
+
+  func onSoundStart() {
+    sendEvent("soundstart")
+  }
+
+  func onSoundEnd() {
+    sendEvent("soundend")
+  }
+
+  func onAudioStart(filePath: String?) {
+    if let filePath = filePath {
+      let uri = filePath.hasPrefix("file://") ? filePath : "file://" + filePath
+      sendEvent("audiostart", ["uri": uri])
+    } else {
+      sendEvent("audiostart", ["uri": nil])
+    }
+  }
+
+  func onAudioEnd(filePath: String?) {
+    if let filePath = filePath {
+      let uri = filePath.hasPrefix("file://") ? filePath : "file://" + filePath
+      sendEvent("audioend", ["uri": uri])
+    } else {
+      sendEvent("audioend", ["uri": nil])
+    }
+  }
+
+  func onEnd() {
+    hasSeenFinalResult = false
+    previousResult = nil
+    sendEvent("end")
+  }
+
+  func onVolumeChange(_ value: Float) {
+    sendEvent("volumechange", ["value": value])
+  }
+
+  func onEngineSelected(_ info: EngineSelectionInfo) {
+    sendEvent("engineselected", [
+      "engine": info.engine.rawValue,
+      "reason": info.reason.rawValue,
+    ])
+  }
+
+  func onAssetRequired(locale: String, status: SpeechAnalyzerAssetStatus, progress: Double?) {
+    sendEvent("assetrequired", [
+      "locale": locale,
+      "status": status.rawValue,
+      "progress": progress as Any,
+    ])
+  }
+
+  // MARK: - Helpers
 
   /** Normalizes the locale for compatibility between Android and iOS */
   func resolveLocale(localeIdentifier: String) -> Locale? {
@@ -430,12 +530,6 @@ public class ExpoSpeechRecognitionModule: Module {
     hasSeenFinalResult = false
     previousResult = nil
     sendEvent("error", ["error": error, "message": message])
-    sendEvent("end")
-  }
-
-  func handleEnd() {
-    hasSeenFinalResult = false
-    previousResult = nil
     sendEvent("end")
   }
 

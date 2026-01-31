@@ -3,32 +3,9 @@ import Accelerate
 import Foundation
 import Speech
 
-enum RecognizerError: Error {
-  case nilRecognizer
-  case notAuthorizedToRecognize
-  case notPermittedToRecord
-  case recognizerIsUnavailable
-  case invalidAudioSource
-  case audioInputBusy
-  case audioSessionInterrupted
-  case audioRouteChanged
-
-  var message: String {
-    switch self {
-    case .nilRecognizer:
-      return "Can't initialize speech recognizer. Ensure the locale is supported by the device."
-    case .notAuthorizedToRecognize: return "Not authorized to recognize speech"
-    case .notPermittedToRecord: return "Not permitted to record audio"
-    case .recognizerIsUnavailable: return "Recognizer is unavailable"
-    case .invalidAudioSource: return "Invalid audio source"
-    case .audioInputBusy: return "The audio input is busy"
-    case .audioSessionInterrupted: return "Audio session was interrupted"
-    case .audioRouteChanged: return "Audio route changed and failed to restart the audio engine"
-    }
-  }
-}
-
-actor ExpoSpeechRecognizer: ObservableObject {
+/// Legacy SFSpeechRecognizer-based engine (iOS 13.4+)
+/// Implements the SpeechRecognitionEngine protocol for unified engine abstraction
+actor LegacySpeechRecognizer: SpeechRecognitionEngine {
   private var options: SpeechRecognitionOptions?
   private var audioEngine: AVAudioEngine?
   private var request: SFSpeechRecognitionRequest?
@@ -41,6 +18,9 @@ actor ExpoSpeechRecognizer: ObservableObject {
   private var audioSessionRouteChangeObserver: NSObjectProtocol?
   /// Whether the recognizer has been stopped by the user or the timer has timed out
   private var stoppedListening = false
+
+  /// Delegate for receiving recognition events
+  private weak var delegate: SpeechRecognitionEngineDelegate?
 
   /// Detection timer, for non-continuous speech recognition
   @MainActor var detectionTimer: Timer?
@@ -65,19 +45,119 @@ actor ExpoSpeechRecognizer: ObservableObject {
     }
   }
 
+  // MARK: - SpeechRecognitionEngine Protocol
+
+  func getState() -> String {
+    switch task?.state {
+    case .none:
+      return "inactive"
+    case .some(.starting), .some(.running):
+      return "recognizing"
+    case .some(.canceling):
+      return "stopping"
+    default:
+      return "inactive"
+    }
+  }
+
+  func getLocale() -> String? {
+    return recognizer?.locale.identifier
+  }
+
+  func supports(feature: SpeechRecognitionFeature) -> Bool {
+    switch feature {
+    case .contextualStrings:
+      return true  // SFSpeechRecognizer supports contextualStrings
+    case .onDeviceRecognition:
+      return recognizer?.supportsOnDeviceRecognition ?? false
+    case .automaticLanguageDetection:
+      return false  // Not supported in legacy engine
+    case .dictationMode:
+      return true  // Via taskHint
+    case .punctuation:
+      if #available(iOS 16, *) {
+        return true
+      }
+      return false
+    case .networkRecognition:
+      return true
+    case .maxAlternatives:
+      return true  // SFSpeechRecognizer supports multiple alternatives
+    }
+  }
+
+  // MARK: - Start Method (matches original @MainActor threading)
+
+  @MainActor func start(
+    options: SpeechRecognitionOptions,
+    delegate: SpeechRecognitionEngineDelegate
+  ) async throws {
+    // Store delegate for later use
+    await setDelegate(delegate)
+
+    // Emit engine selection event
+    delegate.onEngineSelected(EngineSelectionInfo(
+      engine: .sfSpeechRecognizer,
+      reason: .iosVersion
+    ))
+
+    // Set up handlers exactly like original
+    self.endHandler = { delegate.onEnd() }
+    self.audioEndHandler = { filePath in delegate.onAudioEnd(filePath: filePath) }
+    self.volumeChangeHandler = { value in delegate.onVolumeChange(value) }
+    self.errorHandler = { error in delegate.onError(error) }
+
+    // Create Task and call startRecognizer exactly like original
+    Task {
+      await startRecognizer(
+        options: options,
+        resultHandler: { result in
+          delegate.onResult(result)
+        },
+        errorHandler: { error in
+          delegate.onError(error)
+        },
+        startHandler: { delegate.onStart() },
+        speechStartHandler: { delegate.onSpeechStart() },
+        audioStartHandler: { filePath in delegate.onAudioStart(filePath: filePath) }
+      )
+    }
+  }
+
+  private func setDelegate(_ delegate: SpeechRecognitionEngineDelegate) {
+    self.delegate = delegate
+  }
+
+  /// Stops the speech recognizer.
+  /// Attempts to emit a final result if the speech recognizer is still running.
+  @MainActor func stop() {
+    Task {
+      let taskState = await task?.state
+      // Check if the recognizer is running
+      // If it is, then just run the stopListening function
+      if taskState == .running || taskState == .starting {
+        await stopListening()
+      } else {
+        // Task isn't likely running, just reset and emit an end event
+        await reset(andEmitEnd: true)
+      }
+    }
+  }
+
+  /// Cancels the current speech recognition task.
+  /// This is different from `stop` in that the recognition task is immediately cancelled and no
+  /// final result is emitted.
+  @MainActor func abort() {
+    Task {
+      await reset(andEmitEnd: true)
+    }
+  }
+
+  // MARK: - Private Implementation
+
   /// Returns a suitable audio format to use for the speech recognition task and audio file recording.
   private static func getAudioFormat(forEngine engine: AVAudioEngine) -> AVAudioFormat {
     return engine.inputNode.outputFormat(forBus: 0)
-
-    // let format = engine.inputNode.outputFormat(forBus: 0)
-    // if format.sampleRate > 0 {
-    //   return format
-    // }
-    // print("WARN: returning custom audio format")
-    // return AVAudioFormat(
-    //   standardFormatWithSampleRate: AVAudioSession.sharedInstance().sampleRate,
-    //   channels: 1
-    // )!
   }
 
   private static func getFileAudioFormat(
@@ -114,83 +194,6 @@ actor ExpoSpeechRecognizer: ObservableObject {
       )
     }
     return engine.inputNode.outputFormat(forBus: 0)
-  }
-
-  func getLocale() -> String? {
-    return recognizer?.locale.identifier
-  }
-
-  // Update the start method signature to include volumeChangeHandler
-  @MainActor func start(
-    options: SpeechRecognitionOptions,
-    resultHandler: @escaping (SFSpeechRecognitionResult) -> Void,
-    errorHandler: @escaping (Error) -> Void,
-    endHandler: (() -> Void)?,
-    startHandler: @escaping (() -> Void),
-    speechStartHandler: @escaping (() -> Void),
-    audioStartHandler: @escaping (String?) -> Void,
-    audioEndHandler: @escaping (String?) -> Void,
-    volumeChangeHandler: @escaping (Float) -> Void
-  ) {
-    self.endHandler = endHandler
-    self.audioEndHandler = audioEndHandler
-    self.volumeChangeHandler = volumeChangeHandler
-    self.errorHandler = errorHandler
-    Task {
-      await startRecognizer(
-        options: options,
-        resultHandler: resultHandler,
-        errorHandler: errorHandler,
-        startHandler: startHandler,
-        speechStartHandler: speechStartHandler,
-        audioStartHandler: audioStartHandler
-      )
-    }
-  }
-
-  /// Stops the speech recognizer.
-  /// Attempts to emit a final result if the speech recognizer is still running.
-  @MainActor func stop() {
-    Task {
-      let taskState = await task?.state
-      // Check if the recognizer is running
-      // If it is, then just run the stopListening function
-      if taskState == .running || taskState == .starting {
-        await stopListening()
-      } else {
-        // Task isn't likely running, just reset and emit an end event
-        await reset(andEmitEnd: true)
-      }
-    }
-  }
-
-  /// Cancels the current speech recognition task.
-  /// This is different from `stop` in that the recognition task is immediately cancelled and no
-  /// final result is emitted.
-  @MainActor func abort() {
-    Task {
-      await reset(andEmitEnd: true)
-    }
-  }
-
-  ///
-  /// Returns the state of the speech recognizer task
-  /// type SpeechRecognitionState =
-  ///  | "inactive"
-  ///  | "starting"
-  ///  | "recognizing"
-  ///  | "stopping";
-  func getState() -> String {
-    switch task?.state {
-    case .none:
-      return "inactive"
-    case .some(.starting), .some(.running):
-      return "recognizing"
-    case .some(.canceling):
-      return "stopping"
-    default:
-      return "inactive"
-    }
   }
 
   /// Begin transcribing audio.
@@ -300,7 +303,6 @@ actor ExpoSpeechRecognizer: ObservableObject {
       chunkDelayMillis = 50  // Network-based recognition
     }
     let chunkDelayNs = UInt64(chunkDelayMillis) * 1_000_000
-    // var playbackBuffers = [AVAudioPCMBuffer]()
 
     Task.detached(priority: .userInitiated) {
       do {
@@ -316,13 +318,11 @@ actor ExpoSpeechRecognizer: ObservableObject {
           )
           try file.read(into: inputBuffer, frameCount: framesToRead)
           request.append(inputBuffer)
-          // playbackBuffers.append(inputBuffer.copy() as! AVAudioPCMBuffer)
           try await Task.sleep(nanoseconds: chunkDelayNs)
         }
 
         print("[expo-speech-recognition]: Audio streaming ended")
         request.endAudio()
-        // await self.playBack(playbackBuffers: playbackBuffers)
       } catch {
         print("[expo-speech-recognition]: Error feeding audio file: \(error)")
         request.endAudio()
@@ -450,14 +450,6 @@ actor ExpoSpeechRecognizer: ObservableObject {
       audioFileRef = nil
       return nil
     }
-
-    // Note: using `AVAudioFile()` doesn't seem to work
-    // when downsampling pcmFloat32 to pcmInt16
-
-    // let file = try AVAudioFile(
-    //   forWriting: filePath,
-    //   settings: audioFormat.settings
-    // )
 
     return filePath
   }
@@ -656,7 +648,6 @@ actor ExpoSpeechRecognizer: ObservableObject {
         throw RecognizerError.invalidAudioSource
       }
       converter = AVAudioConverter(from: audioFormat, to: unwrappedFileOutputFormat)
-      // converter?.channelMap = [0]
     }
 
     mixerNode.installTap(
@@ -813,7 +804,6 @@ actor ExpoSpeechRecognizer: ObservableObject {
   }
 
   private static func calculatePower(buffer: AVAudioPCMBuffer) -> Float? {
-    // let channelCount = Int(buffer.format.channelCount)
     let length = vDSP_Length(buffer.frameLength)
     let channel = 0
 
@@ -984,37 +974,36 @@ actor ExpoSpeechRecognizer: ObservableObject {
       }
     }
   }
+}
 
-  /*
-  private var playbackEngine: AVAudioEngine?
-  private var playerNode: AVAudioPlayerNode?
-  /// Playback audio from an array of AVAudioPCMBuffers
-  /// For testing purposes only
-  func playBack(playbackBuffers: [AVAudioPCMBuffer]) {
-    guard !playbackBuffers.isEmpty else { return }
-  
-    playbackEngine = AVAudioEngine()
-    playerNode = AVAudioPlayerNode()
-  
-    guard let playbackEngine = playbackEngine, let playerNode = playerNode else { return }
-  
-    playbackEngine.attach(playerNode)
-    let outputFormat = playbackBuffers[0].format
-    playbackEngine.connect(playerNode, to: playbackEngine.mainMixerNode, format: outputFormat)
-  
-    for buffer in playbackBuffers {
-      playerNode.scheduleBuffer(buffer, completionHandler: nil)
-    }
-  
-    do {
-      try playbackEngine.start()
-      playerNode.play()
-    } catch {
-      print("Failed to start playback engine: \(error)")
+// MARK: - Legacy RecognizerError (kept for backward compatibility)
+
+enum RecognizerError: Error {
+  case nilRecognizer
+  case notAuthorizedToRecognize
+  case notPermittedToRecord
+  case recognizerIsUnavailable
+  case invalidAudioSource
+  case audioInputBusy
+  case audioSessionInterrupted
+  case audioRouteChanged
+
+  var message: String {
+    switch self {
+    case .nilRecognizer:
+      return "Can't initialize speech recognizer. Ensure the locale is supported by the device."
+    case .notAuthorizedToRecognize: return "Not authorized to recognize speech"
+    case .notPermittedToRecord: return "Not permitted to record audio"
+    case .recognizerIsUnavailable: return "Recognizer is unavailable"
+    case .invalidAudioSource: return "Invalid audio source"
+    case .audioInputBusy: return "The audio input is busy"
+    case .audioSessionInterrupted: return "Audio session was interrupted"
+    case .audioRouteChanged: return "Audio route changed and failed to restart the audio engine"
     }
   }
-  */
 }
+
+// MARK: - Extensions
 
 extension SFSpeechRecognizer {
   static func hasAuthorizationToRecognize() async -> Bool {
