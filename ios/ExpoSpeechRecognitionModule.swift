@@ -187,24 +187,37 @@ public class ExpoSpeechRecognitionModule: Module, SpeechRecognitionEngineDelegat
           self.previousResult = nil
           self.currentMaxAlternatives = options.maxAlternatives
 
-          // Re-create the speech recognizer when locales change
-          if self.speechRecognizer == nil || currentLocale != options.lang {
-            guard let locale = resolveLocale(localeIdentifier: options.lang) else {
-              let availableLocales = SFSpeechRecognizer.supportedLocales().map { $0.identifier }
-                .joined(separator: ", ")
+          // Resolve the locale first
+          guard let locale = resolveLocale(localeIdentifier: options.lang) else {
+            let availableLocales = SFSpeechRecognizer.supportedLocales().map { $0.identifier }
+              .joined(separator: ", ")
 
-              sendErrorAndStop(
-                error: "language-not-supported",
-                message:
-                  "Locale \(options.lang) is not supported by the speech recognizer. Available locales: \(availableLocales)"
-              )
-              return
-            }
+            sendErrorAndStop(
+              error: "language-not-supported",
+              message:
+                "Locale \(options.lang) is not supported by the speech recognizer. Available locales: \(availableLocales)"
+            )
+            return
+          }
 
-            // Use the factory to create the engine
+          // Determine whether to recreate the engine
+          // iOS 26+: Always recreate - engine selection depends on options AND asset status
+          // iOS < 26: Only recreate when locale changes - engine is always SFSpeechRecognizer
+          let shouldRecreateEngine: Bool
+          if #available(iOS 26, *) {
+            // Options like contextualStrings, iosForceLegacyEngine, and asset status
+            // affect engine selection on iOS 26+ - must evaluate fresh each time
+            shouldRecreateEngine = true
+          } else {
+            // Engine is fixed on older iOS - only recreate for locale changes
+            shouldRecreateEngine = self.speechRecognizer == nil || currentLocale != options.lang
+          }
+
+          if shouldRecreateEngine {
             self.speechRecognizer = try await SpeechRecognitionEngineFactory.createEngine(
               locale: locale,
-              options: options
+              options: options,
+              delegate: self
             )
           }
 
@@ -440,6 +453,10 @@ public class ExpoSpeechRecognitionModule: Module, SpeechRecognitionEngineDelegat
     handleRecognitionResult(result, maxAlternatives: currentMaxAlternatives)
   }
 
+  func onUnifiedResult(_ result: UnifiedTranscriptionResult) {
+    handleUnifiedResult(result)
+  }
+
   func onError(_ error: Error) {
     handleRecognitionError(error)
   }
@@ -616,7 +633,60 @@ public class ExpoSpeechRecognitionModule: Module, SpeechRecognitionEngineDelegat
     previousResult = result
   }
 
+  /// Handles results from SpeechAnalyzer (iOS 26+)
+  /// Uses the unified result format since SFSpeechRecognitionResult can't be created directly
+  func handleUnifiedResult(_ result: UnifiedTranscriptionResult) {
+    var results: [TranscriptionResult] = []
+
+    // SpeechAnalyzer only provides a single result (no alternatives)
+    if !result.transcript.isEmpty {
+      // Convert unified segments to local Segment type
+      let segments = result.segments.map { segment in
+        return Segment(
+          startTimeMillis: segment.startTimeMillis,
+          endTimeMillis: segment.endTimeMillis,
+          segment: segment.segment,
+          confidence: segment.confidence
+        )
+      }
+
+      var transcript = result.transcript
+
+      // Apply space prefix for continuous mode (matching legacy behavior)
+      if hasSeenFinalResult {
+        transcript = " " + result.transcript
+      }
+
+      let item = TranscriptionResult(
+        transcript: transcript,
+        confidence: result.confidence,
+        segments: segments
+      )
+      results.append(item)
+    }
+
+    // Track final results for continuous mode
+    if result.isFinal {
+      hasSeenFinalResult = true
+    }
+
+    // Handle nomatch case
+    if result.isFinal && results.isEmpty {
+      sendEvent("nomatch")
+      return
+    }
+
+    sendEvent(
+      "result",
+      [
+        "isFinal": result.isFinal,
+        "results": results.map { $0.toDictionary() },
+      ]
+    )
+  }
+
   func handleRecognitionError(_ error: Error) {
+    // Handle legacy RecognizerError (from LegacySpeechRecognizer)
     if let recognitionError = error as? RecognizerError {
       switch recognitionError {
       case .nilRecognizer:
@@ -637,6 +707,12 @@ public class ExpoSpeechRecognitionModule: Module, SpeechRecognitionEngineDelegat
       case .audioRouteChanged:
         sendEvent("error", ["error": "audio-capture", "message": recognitionError.message])
       }
+      return
+    }
+
+    // Handle SpeechRecognitionEngineError (from SpeechAnalyzerEngine iOS 26+)
+    if let engineError = error as? SpeechRecognitionEngineError {
+      sendEvent("error", ["error": engineError.code, "message": engineError.message])
       return
     }
 

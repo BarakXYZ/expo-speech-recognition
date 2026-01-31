@@ -59,6 +59,19 @@ export default function App() {
     "idle",
   );
 
+  // Track which engine is being used (iOS 26+ can use SpeechAnalyzer)
+  const [activeEngine, setActiveEngine] = useState<string | null>(null);
+
+  // Toggle for contextual strings (disabling allows SpeechAnalyzer on iOS 26+)
+  const [useContextualStrings, setUseContextualStrings] = useState(false);
+
+  const contextualStringsValues = [
+    "expo-speech-recognition",
+    "Carlsen",
+    "Ian Nepomniachtchi",
+    "Praggnanandhaa",
+  ];
+
   const [settings, setSettings] = useState<ExpoSpeechRecognitionOptions>({
     lang: "en-US",
     interimResults: true,
@@ -66,12 +79,7 @@ export default function App() {
     continuous: true,
     requiresOnDeviceRecognition: false,
     addsPunctuation: true,
-    contextualStrings: [
-      "expo-speech-recognition",
-      "Carlsen",
-      "Ian Nepomniachtchi",
-      "Praggnanandhaa",
-    ],
+    // contextualStrings is controlled by useContextualStrings toggle
     volumeChangeEventOptions: {
       enabled: false,
       intervalMillis: 300,
@@ -135,6 +143,12 @@ export default function App() {
     console.log("[event]: languagedetection", ev);
   });
 
+  // Track which engine is being used (iOS 26+ SpeechAnalyzer vs legacy SFSpeechRecognizer)
+  useSpeechRecognitionEvent("engineselected", (ev) => {
+    console.log("[event]: engineselected", ev);
+    setActiveEngine(`${ev.engine} (${ev.reason})`);
+  });
+
   const startListening = async () => {
     if (status !== "idle") {
       return;
@@ -174,9 +188,15 @@ export default function App() {
       }
     }
 
-    console.log(settings);
+    // Merge settings with conditional contextualStrings
+    const finalSettings = {
+      ...settings,
+      ...(useContextualStrings ? { contextualStrings: contextualStringsValues } : {}),
+    };
+    console.log(finalSettings);
 
-    ExpoSpeechRecognitionModule.start(settings);
+    setActiveEngine(null); // Reset before starting
+    ExpoSpeechRecognitionModule.start(finalSettings);
   };
 
   return (
@@ -206,6 +226,11 @@ export default function App() {
                 {status}
               </Text>
             </Text>
+            {activeEngine && (
+              <Text style={[styles.text, { color: "#007AFF", marginTop: 4 }]}>
+                Engine: {activeEngine}
+              </Text>
+            )}
           </View>
           <View style={{ marginTop: 10 }}>
             <Text style={styles.text}>
@@ -215,7 +240,12 @@ export default function App() {
         </Card>
 
         <Card use={ScrollView} contentContainerStyle={{ paddingBottom: 20 }}>
-          <Settings value={settings} onChange={setSettings} />
+          <Settings
+            value={settings}
+            onChange={setSettings}
+            useContextualStrings={useContextualStrings}
+            setUseContextualStrings={setUseContextualStrings}
+          />
         </Card>
 
         <Card
@@ -253,8 +283,10 @@ export default function App() {
 function Settings(props: {
   value: ExpoSpeechRecognitionOptions;
   onChange: (v: ExpoSpeechRecognitionOptions) => void;
+  useContextualStrings: boolean;
+  setUseContextualStrings: (value: boolean) => void;
 }) {
-  const { value: settings, onChange } = props;
+  const { value: settings, onChange, useContextualStrings, setUseContextualStrings } = props;
 
   const [tab, setTab] = useState<"general" | "android" | "ios" | "other">(
     "general",
@@ -300,7 +332,12 @@ function Settings(props: {
         />
       </View>
       {tab === "general" && (
-        <GeneralSettings value={settings} onChange={handleChange} />
+        <GeneralSettings
+          value={settings}
+          onChange={handleChange}
+          useContextualStrings={useContextualStrings}
+          setUseContextualStrings={setUseContextualStrings}
+        />
       )}
       {tab === "android" && (
         <AndroidSettings value={settings} onChange={handleChange} />
@@ -439,8 +476,10 @@ function GeneralSettings(props: {
     key: T,
     value: ExpoSpeechRecognitionOptions[T],
   ) => void;
+  useContextualStrings: boolean;
+  setUseContextualStrings: (value: boolean) => void;
 }) {
-  const { value: settings, onChange: handleChange } = props;
+  const { value: settings, onChange: handleChange, useContextualStrings, setUseContextualStrings } = props;
 
   const [supportedLocales, setSupportedLocales] = useState<{
     locales: string[];
@@ -511,6 +550,11 @@ function GeneralSettings(props: {
               intervalMillis: settings.volumeChangeEventOptions?.intervalMillis,
             })
           }
+        />
+        <CheckboxButton
+          title="Contextual Strings (forces legacy engine)"
+          checked={useContextualStrings}
+          onPress={() => setUseContextualStrings(!useContextualStrings)}
         />
 
         {Platform.OS === "ios" && (

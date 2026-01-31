@@ -142,7 +142,13 @@ struct SpeechAnalyzerAssetInfo {
 /// Callbacks for speech recognition events
 /// Note: For legacy engine, result/error types match SFSpeechRecognizer directly for full compatibility
 protocol SpeechRecognitionEngineDelegate: AnyObject {
+  /// Called when legacy engine (SFSpeechRecognizer) produces a result
   func onResult(_ result: SFSpeechRecognitionResult)
+
+  /// Called when SpeechAnalyzer (iOS 26+) produces a result
+  /// This provides a unified format since SFSpeechRecognitionResult can't be created directly
+  func onUnifiedResult(_ result: UnifiedTranscriptionResult)
+
   func onError(_ error: Error)
   func onStart()
   func onSpeechStart()
