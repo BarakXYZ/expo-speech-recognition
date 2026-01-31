@@ -349,6 +349,49 @@ export const TaskHintIOS = {
 } as const;
 
 /**
+ * [iOS 26+] Transcriber type for SpeechAnalyzer.
+ *
+ * Specifies which Apple transcriber to use on iOS 26+.
+ * - "speech": Uses SpeechTranscriber for commands, keywords, short phrases
+ * - "dictation": Uses DictationTranscriber for full dictation with punctuation
+ */
+export const TranscriberTypeIOS = {
+  /**
+   * Uses SpeechTranscriber - optimized for commands, keywords, and short phrases.
+   * Returns raw words without automatic punctuation.
+   */
+  speech: "speech",
+  /**
+   * Uses DictationTranscriber - optimized for full dictation.
+   * Returns formatted text with punctuation and sentence structure.
+   */
+  dictation: "dictation",
+} as const;
+
+/**
+ * [iOS 26+] Asset policy for SpeechAnalyzer.
+ *
+ * Controls behavior when SpeechAnalyzer assets aren't installed for the requested locale.
+ */
+export const SpeechAnalyzerAssetPolicyIOS = {
+  /**
+   * Silently fallback to SFSpeechRecognizer if assets are not installed.
+   * This is the default behavior and ensures speech recognition always works.
+   */
+  auto: "auto",
+  /**
+   * Emit 'asset-not-installed' error if assets are not installed.
+   * Use this when you require on-device recognition and want to handle the error explicitly.
+   */
+  require: "require",
+  /**
+   * Auto-trigger asset download and use SFSpeechRecognizer in the meantime.
+   * The next recognition attempt (after download completes) will use SpeechAnalyzer.
+   */
+  download: "download",
+} as const;
+
+/**
  * An enum of the error codes for the Android SpeechRecognizer class.
  *
  * Docs: https://developer.android.com/reference/android/speech/SpeechRecognizer

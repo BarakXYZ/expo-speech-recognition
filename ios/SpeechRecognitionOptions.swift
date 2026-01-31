@@ -40,6 +40,30 @@ struct SpeechRecognitionOptions: Record {
 
   @Field
   var iosVoiceProcessingEnabled: Bool? = false
+
+  // MARK: - iOS 26+ SpeechAnalyzer Options
+
+  /// [iOS 26+] Transcriber type for SpeechAnalyzer.
+  /// - "speech": Raw words (commands, keywords) - uses SpeechTranscriber
+  /// - "dictation": Full dictation with punctuation - uses DictationTranscriber
+  /// Default: "speech"
+  /// Note: When addsPunctuation=true, automatically uses "dictation"
+  @Field
+  var iosTranscriberType: IOSTranscriberType? = nil
+
+  /// [iOS 26+] Force use of legacy SFSpeechRecognizer.
+  /// Useful when you need contextualStrings.
+  /// Default: false
+  @Field
+  var iosForceLegacyEngine: Bool = false
+
+  /// [iOS 26+] Controls behavior when SpeechAnalyzer assets aren't installed.
+  /// - "auto": Silently fallback to SFSpeechRecognizer (default)
+  /// - "require": Emit 'asset-not-installed' error, don't fallback
+  /// - "download": Auto-trigger download, use SFSpeechRecognizer meanwhile
+  /// Default: "auto"
+  @Field
+  var iosSpeechAnalyzerAssetPolicy: IOSSpeechAnalyzerAssetPolicy? = nil
 }
 
 struct VolumeChangeEventOptions: Record {
@@ -64,6 +88,26 @@ enum IOSTaskHint: String, Enumerable {
     case .confirmation: return .confirmation
     }
   }
+}
+
+// MARK: - iOS 26+ SpeechAnalyzer Enums
+
+/// Transcriber type for iOS 26+ SpeechAnalyzer
+enum IOSTranscriberType: String, Enumerable {
+  /// Raw words - uses SpeechTranscriber for commands, keywords, short phrases
+  case speech
+  /// Full dictation with punctuation - uses DictationTranscriber
+  case dictation
+}
+
+/// Asset policy for iOS 26+ SpeechAnalyzer
+enum IOSSpeechAnalyzerAssetPolicy: String, Enumerable {
+  /// Silently fallback to SFSpeechRecognizer if assets not installed (default)
+  case auto
+  /// Emit 'asset-not-installed' error, don't fallback
+  case require
+  /// Auto-trigger download, use SFSpeechRecognizer meanwhile
+  case download
 }
 
 struct RecordingOptions: Record {

@@ -21,6 +21,9 @@ export {
   AudioEncodingAndroid,
   TaskHintIOS,
   SpeechRecognizerErrorAndroid,
+  // iOS 26+ SpeechAnalyzer constants
+  TranscriberTypeIOS,
+  SpeechAnalyzerAssetPolicyIOS,
 } from "./constants";
 
 export type {
@@ -40,4 +43,7 @@ export type {
   ExpoSpeechRecognitionResultEvent,
   ExpoSpeechRecognitionResult,
   ExpoSpeechRecognitionResultSegment,
+  // iOS 26+ SpeechAnalyzer types
+  SpeechAnalyzerAssetStatus,
+  EngineSelectionInfo,
 } from "./ExpoSpeechRecognitionModule.types";

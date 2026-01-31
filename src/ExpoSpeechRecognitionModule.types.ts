@@ -94,7 +94,12 @@ export type ExpoSpeechRecognitionErrorCode =
   /** (Android) No speech input. */
   | "speech-timeout"
   /** (Android) Unknown error */
-  | "unknown";
+  | "unknown"
+  // iOS 26+ SpeechAnalyzer specific errors
+  /** [iOS 26+] SpeechAnalyzer assets are not installed for the locale */
+  | "asset-not-installed"
+  /** [iOS 26+] Failed to download SpeechAnalyzer assets */
+  | "asset-download-failed";
 
 export type ExpoSpeechRecognitionErrorEvent = {
   error: ExpoSpeechRecognitionErrorCode;
@@ -174,6 +179,34 @@ export type ExpoSpeechRecognitionNativeEventMap = {
      * Consider anything below 0 to be inaudible
      */
     value: number;
+  };
+  /**
+   * [iOS 26+] Fired when recognition starts, indicating which engine was selected.
+   * This event helps you understand whether SpeechAnalyzer or SFSpeechRecognizer is being used.
+   */
+  engineselected: {
+    /** The speech recognition engine that was selected */
+    engine: "SpeechAnalyzer" | "SFSpeechRecognizer";
+    /** The reason why this engine was selected */
+    reason:
+      | "ios_version"
+      | "asset_installed"
+      | "asset_not_installed"
+      | "force_legacy"
+      | "contextual_strings"
+      | "android";
+  };
+  /**
+   * [iOS 26+] Fired when SpeechAnalyzer assets are required but not installed.
+   * Listen to this event to prompt the user to download assets for offline recognition.
+   */
+  assetrequired: {
+    /** The locale that requires asset download */
+    locale: string;
+    /** Current status of the asset */
+    status: "not_installed" | "installing";
+    /** Download progress (0.0 - 1.0) if currently installing, null otherwise */
+    progress: number | null;
   };
 };
 
@@ -315,6 +348,42 @@ export type ExpoSpeechRecognitionOptions = {
    * (This option will place both input and output nodes in voice processing mode as noted in Apple docs: http://developer.apple.com/videos/play/wwdc2019/510/?time=66)
    */
   iosVoiceProcessingEnabled?: boolean;
+
+  // MARK: - iOS 26+ SpeechAnalyzer Options
+
+  /**
+   * [iOS 26+] Transcriber type for SpeechAnalyzer.
+   *
+   * - "speech": Raw words (commands, keywords) - uses SpeechTranscriber
+   * - "dictation": Full dictation with punctuation - uses DictationTranscriber
+   *
+   * Default: "speech"
+   *
+   * Note: When `addsPunctuation` is true, automatically uses "dictation"
+   */
+  iosTranscriberType?: "speech" | "dictation";
+
+  /**
+   * [iOS 26+] Force use of legacy SFSpeechRecognizer even on iOS 26+.
+   *
+   * Useful when you need features not supported by SpeechAnalyzer:
+   * - `contextualStrings` (custom vocabulary biasing)
+   * - `maxAlternatives` (multiple transcription alternatives)
+   *
+   * Default: false
+   */
+  iosForceLegacyEngine?: boolean;
+
+  /**
+   * [iOS 26+] Controls behavior when SpeechAnalyzer assets aren't installed.
+   *
+   * - "auto": Silently fallback to SFSpeechRecognizer (default)
+   * - "require": Emit 'asset-not-installed' error, don't fallback
+   * - "download": Auto-trigger download, use SFSpeechRecognizer meanwhile
+   *
+   * Default: "auto"
+   */
+  iosSpeechAnalyzerAssetPolicy?: "auto" | "require" | "download";
 };
 
 export type IOSTaskHintValue = (typeof TaskHintIOS)[keyof typeof TaskHintIOS];
@@ -580,6 +649,41 @@ export type ExpoSpeechRecognitionNativeEvents = {
   ) => void;
 };
 
+// MARK: - iOS 26+ SpeechAnalyzer Types
+
+/**
+ * [iOS 26+] Status information for SpeechAnalyzer assets for a locale.
+ */
+export type SpeechAnalyzerAssetStatus = {
+  /** The locale identifier, e.g. "en-US" */
+  locale: string;
+  /** Installation status of the assets */
+  status:
+    | "installed"
+    | "not_installed"
+    | "installing"
+    | "not_available"
+    | "unknown";
+  /** Download progress (0.0 - 1.0) if currently installing, null otherwise */
+  progress: number | null;
+};
+
+/**
+ * [iOS 26+] Information about which speech recognition engine is being used.
+ */
+export type EngineSelectionInfo = {
+  /** The speech recognition engine that was selected */
+  engine: "SpeechAnalyzer" | "SFSpeechRecognizer";
+  /** The reason why this engine was selected */
+  reason:
+    | "ios_version"
+    | "asset_installed"
+    | "asset_not_installed"
+    | "force_legacy"
+    | "contextual_strings"
+    | "android";
+};
+
 export declare class ExpoSpeechRecognitionModuleType extends NativeModule<ExpoSpeechRecognitionNativeEvents> {
   /**
    * Starts speech recognition.
@@ -758,6 +862,51 @@ export declare class ExpoSpeechRecognitionModuleType extends NativeModule<ExpoSp
    * Returns the current state of the speech recognizer.
    */
   getStateAsync(): Promise<SpeechRecognitionState>;
+
+  // MARK: - iOS 26+ SpeechAnalyzer Asset Management
+
+  /**
+   * [iOS 26+ only] Get the installation status of SpeechAnalyzer assets for a locale.
+   *
+   * Returns "not_available" status on iOS versions prior to 26.
+   *
+   * @param locale - The locale to check, e.g. "en-US"
+   */
+  getSpeechAnalyzerAssetStatus(
+    locale: string,
+  ): Promise<SpeechAnalyzerAssetStatus>;
+
+  /**
+   * [iOS 26+ only] Trigger download of SpeechAnalyzer assets for a locale.
+   *
+   * @param locale - The locale to download, e.g. "en-US"
+   * @throws On iOS < 26 or if download fails
+   */
+  downloadSpeechAnalyzerAsset(locale: string): Promise<{
+    status: "download_started";
+    locale: string;
+  }>;
+
+  /**
+   * [iOS 26+ only] Get all available SpeechAnalyzer locales with their installation status.
+   *
+   * Returns empty array on iOS < 26.
+   */
+  getSpeechAnalyzerLocales(): Promise<SpeechAnalyzerAssetStatus[]>;
+
+  /**
+   * Returns information about which speech recognition engine would be used
+   * for the given configuration.
+   *
+   * @param options - Optional configuration to check engine selection
+   */
+  getPreferredEngine(options?: {
+    locale?: string;
+    iosForceLegacyEngine?: boolean;
+  }): Promise<{
+    engine: "SpeechAnalyzer" | "SFSpeechRecognizer" | "Android";
+    reason: string;
+  }>;
 }
 
 export type SetCategoryOptions = {
