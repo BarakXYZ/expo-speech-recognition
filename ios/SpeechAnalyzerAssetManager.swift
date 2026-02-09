@@ -9,15 +9,16 @@ actor SpeechAnalyzerAssetManager {
 
   private var activeDownloadProgress: [String: Progress] = [:]
 
-  func getAssetStatus(for locale: Locale) async -> SpeechAnalyzerAssetInfo {
-    let inventoryStatus = await Self.getInventoryStatus(for: locale)
+  func getAssetStatus(for locale: Locale, useDictation: Bool = false) async -> SpeechAnalyzerAssetInfo {
+    let inventoryStatus = await Self.getInventoryStatus(for: locale, useDictation: useDictation)
     var status = Self.mapInventoryStatus(inventoryStatus)
+    let progressKey = Self.progressKey(for: locale.identifier, useDictation: useDictation)
 
-    if status == .installing, let progress = activeDownloadProgress[locale.identifier] {
+    if status == .installing, let progress = activeDownloadProgress[progressKey] {
       // Keep status/install progress in sync with locally-triggered requests.
       if progress.isFinished {
-        activeDownloadProgress[locale.identifier] = nil
-        let refreshedStatus = await Self.getInventoryStatus(for: locale)
+        activeDownloadProgress[progressKey] = nil
+        let refreshedStatus = await Self.getInventoryStatus(for: locale, useDictation: useDictation)
         status = Self.mapInventoryStatus(refreshedStatus)
       } else {
         return SpeechAnalyzerAssetInfo(
@@ -27,7 +28,7 @@ actor SpeechAnalyzerAssetManager {
         )
       }
     } else if status != .installing {
-      activeDownloadProgress[locale.identifier] = nil
+      activeDownloadProgress[progressKey] = nil
     }
 
     return SpeechAnalyzerAssetInfo(
@@ -37,8 +38,8 @@ actor SpeechAnalyzerAssetManager {
     )
   }
 
-  func downloadAsset(for locale: Locale) async throws {
-    let statusInfo = await getAssetStatus(for: locale)
+  func downloadAsset(for locale: Locale, useDictation: Bool = false) async throws {
+    let statusInfo = await getAssetStatus(for: locale, useDictation: useDictation)
 
     switch statusInfo.status {
     case .installed:
@@ -48,21 +49,16 @@ actor SpeechAnalyzerAssetManager {
     case .installing:
       return
     case .notInstalled, .unknown:
-      let transcriber = SpeechTranscriber(
-        locale: locale,
-        transcriptionOptions: [],
-        reportingOptions: [],
-        attributeOptions: []
-      )
+      let module = Self.createAssetModule(locale: locale, useDictation: useDictation)
 
       guard
-        let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber])
+        let request = try await AssetInventory.assetInstallationRequest(supporting: [module])
       else {
         return
       }
 
-      let localeIdentifier = locale.identifier
-      activeDownloadProgress[localeIdentifier] = request.progress
+      let progressKey = Self.progressKey(for: locale.identifier, useDictation: useDictation)
+      activeDownloadProgress[progressKey] = request.progress
 
       Task.detached(priority: .utility) {
         do {
@@ -70,19 +66,24 @@ actor SpeechAnalyzerAssetManager {
         } catch {
           // Keep cleanup best-effort and let callers inspect status/errors independently.
         }
-        await SpeechAnalyzerAssetManager.shared.clearProgress(for: localeIdentifier)
+        await SpeechAnalyzerAssetManager.shared.clearProgress(for: progressKey)
       }
     }
   }
 
-  func getAllLocalesStatus() async -> [SpeechAnalyzerAssetInfo] {
-    let supportedLocales = await SpeechTranscriber.supportedLocales
+  func getAllLocalesStatus(useDictation: Bool = false) async -> [SpeechAnalyzerAssetInfo] {
+    let supportedLocales: [Locale]
+    if useDictation {
+      supportedLocales = await DictationTranscriber.supportedLocales
+    } else {
+      supportedLocales = await SpeechTranscriber.supportedLocales
+    }
 
     var results: [SpeechAnalyzerAssetInfo] = []
     results.reserveCapacity(supportedLocales.count)
 
     for locale in supportedLocales.sorted(by: { $0.identifier < $1.identifier }) {
-      let status = await getAssetStatus(for: locale)
+      let status = await getAssetStatus(for: locale, useDictation: useDictation)
       results.append(status)
     }
 
@@ -93,14 +94,33 @@ actor SpeechAnalyzerAssetManager {
     activeDownloadProgress[localeIdentifier] = nil
   }
 
-  private static func getInventoryStatus(for locale: Locale) async -> AssetInventory.Status {
-    let transcriber = SpeechTranscriber(
+  private static func getInventoryStatus(for locale: Locale, useDictation: Bool) async -> AssetInventory.Status {
+    let module = createAssetModule(locale: locale, useDictation: useDictation)
+    return await AssetInventory.status(forModules: [module])
+  }
+
+  private static func createAssetModule(locale: Locale, useDictation: Bool) -> any SpeechModule {
+    if useDictation {
+      return DictationTranscriber(
+        locale: locale,
+        contentHints: [],
+        transcriptionOptions: [.punctuation],
+        reportingOptions: [],
+        attributeOptions: []
+      )
+    }
+
+    return SpeechTranscriber(
       locale: locale,
       transcriptionOptions: [],
       reportingOptions: [],
       attributeOptions: []
     )
-    return await AssetInventory.status(forModules: [transcriber])
+  }
+
+  private static func progressKey(for localeIdentifier: String, useDictation: Bool) -> String {
+    let transcriber = useDictation ? "dictation" : "speech"
+    return "\(localeIdentifier)#\(transcriber)"
   }
 
   private static func mapInventoryStatus(_ status: AssetInventory.Status) -> SpeechAnalyzerAssetStatus {

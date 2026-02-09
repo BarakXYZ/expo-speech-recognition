@@ -399,13 +399,18 @@ public class ExpoSpeechRecognitionModule: Module, SpeechRecognitionEngineDelegat
 
     // MARK: - iOS 26+ SpeechAnalyzer Functions
 
-    AsyncFunction("getSpeechAnalyzerAssetStatus") { (locale: String, promise: Promise) in
+    AsyncFunction("getSpeechAnalyzerAssetStatus") {
+      (locale: String, options: [String: Any]?, promise: Promise) in
       let normalizedLocale = locale.replacingOccurrences(of: "_", with: "-")
+      let useDictation = self.shouldUseDictationForAssetOptions(options)
 
       if #available(iOS 26, *) {
         Task {
           let locale = Locale(identifier: normalizedLocale)
-          let info = await SpeechAnalyzerAssetManager.shared.getAssetStatus(for: locale)
+          let info = await SpeechAnalyzerAssetManager.shared.getAssetStatus(
+            for: locale,
+            useDictation: useDictation
+          )
           promise.resolve(self.assetInfoToDictionary(info))
         }
       } else {
@@ -417,14 +422,19 @@ public class ExpoSpeechRecognitionModule: Module, SpeechRecognitionEngineDelegat
       }
     }
 
-    AsyncFunction("downloadSpeechAnalyzerAsset") { (locale: String, promise: Promise) in
+    AsyncFunction("downloadSpeechAnalyzerAsset") {
+      (locale: String, options: [String: Any]?, promise: Promise) in
       let normalizedLocale = locale.replacingOccurrences(of: "_", with: "-")
+      let useDictation = self.shouldUseDictationForAssetOptions(options)
 
       if #available(iOS 26, *) {
         Task {
           let locale = Locale(identifier: normalizedLocale)
           do {
-            try await SpeechAnalyzerAssetManager.shared.downloadAsset(for: locale)
+            try await SpeechAnalyzerAssetManager.shared.downloadAsset(
+              for: locale,
+              useDictation: useDictation
+            )
             promise.resolve([
               "status": "download_started",
               "locale": normalizedLocale,
@@ -446,10 +456,14 @@ public class ExpoSpeechRecognitionModule: Module, SpeechRecognitionEngineDelegat
       }
     }
 
-    AsyncFunction("getSpeechAnalyzerLocales") { (promise: Promise) in
+    AsyncFunction("getSpeechAnalyzerLocales") { (options: [String: Any]?, promise: Promise) in
+      let useDictation = self.shouldUseDictationForAssetOptions(options)
+
       if #available(iOS 26, *) {
         Task {
-          let locales = await SpeechAnalyzerAssetManager.shared.getAllLocalesStatus()
+          let locales = await SpeechAnalyzerAssetManager.shared.getAllLocalesStatus(
+            useDictation: useDictation
+          )
           promise.resolve(locales.map { self.assetInfoToDictionary($0) })
         }
       } else {
@@ -459,13 +473,35 @@ public class ExpoSpeechRecognitionModule: Module, SpeechRecognitionEngineDelegat
 
     AsyncFunction("getPreferredEngine") {
       (options: [String: Any]?, promise: Promise) in
-      let localeIdentifier = (options?["locale"] as? String)?.replacingOccurrences(of: "_", with: "-")
+      let localeIdentifier =
+        (
+          (options?["locale"] as? String)
+          ?? (options?["lang"] as? String)
+        )?
+        .replacingOccurrences(of: "_", with: "-")
       let iosForceLegacyEngine = options?["iosForceLegacyEngine"] as? Bool ?? false
       let contextualStrings = options?["contextualStrings"] as? [String]
+      let addsPunctuation = options?["addsPunctuation"] as? Bool ?? false
+      let iosTranscriberTypeRaw = options?["iosTranscriberType"] as? String
+      let iosSpeechAnalyzerAssetPolicyRaw = options?["iosSpeechAnalyzerAssetPolicy"] as? String
 
       let recognitionOptions = SpeechRecognitionOptions()
       recognitionOptions.iosForceLegacyEngine = iosForceLegacyEngine
       recognitionOptions.contextualStrings = contextualStrings
+      recognitionOptions.addsPunctuation = addsPunctuation
+
+      if let iosTranscriberTypeRaw,
+        let iosTranscriberType = IOSTranscriberType(rawValue: iosTranscriberTypeRaw)
+      {
+        recognitionOptions.iosTranscriberType = iosTranscriberType
+      }
+
+      if let iosSpeechAnalyzerAssetPolicyRaw,
+        let iosSpeechAnalyzerAssetPolicy = IOSSpeechAnalyzerAssetPolicy(
+          rawValue: iosSpeechAnalyzerAssetPolicyRaw)
+      {
+        recognitionOptions.iosSpeechAnalyzerAssetPolicy = iosSpeechAnalyzerAssetPolicy
+      }
 
       Task {
         if #available(iOS 26, *) {
@@ -604,6 +640,12 @@ public class ExpoSpeechRecognitionModule: Module, SpeechRecognitionEngineDelegat
       "status": info.status.rawValue,
       "progress": info.progress,
     ]
+  }
+
+  func shouldUseDictationForAssetOptions(_ options: [String: Any]?) -> Bool {
+    let addsPunctuation = options?["addsPunctuation"] as? Bool ?? false
+    let iosTranscriberType = options?["iosTranscriberType"] as? String
+    return addsPunctuation || iosTranscriberType == IOSTranscriberType.dictation.rawValue
   }
 
   func handleRecognitionResult(_ result: SFSpeechRecognitionResult, maxAlternatives: Int) {

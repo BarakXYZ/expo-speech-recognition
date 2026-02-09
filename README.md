@@ -2,7 +2,7 @@
 
 [![NPM Version](https://img.shields.io/npm/v/expo-speech-recognition)](https://www.npmjs.com/package/expo-speech-recognition)
 
-expo-speech-recognition implements the iOS [`SFSpeechRecognizer`](https://developer.apple.com/documentation/speech/sfspeechrecognizer), Android [`SpeechRecognizer`](https://developer.android.com/reference/android/speech/SpeechRecognizer) and Web [`SpeechRecognition`](https://wicg.github.io/speech-api/) for React Native projects with the goal of code reuse across web and mobile.
+expo-speech-recognition implements the iOS [`SFSpeechRecognizer`](https://developer.apple.com/documentation/speech/sfspeechrecognizer) (iOS 13.4+), [`SpeechAnalyzer`](https://developer.apple.com/documentation/speech/speechanalyzer) (iOS 26+), Android [`SpeechRecognizer`](https://developer.android.com/reference/android/speech/SpeechRecognizer) and Web [`SpeechRecognition`](https://wicg.github.io/speech-api/) for React Native projects with the goal of code reuse across web and mobile.
 
 ![expo-speech-recognition preview](./images/preview.gif)
 
@@ -26,6 +26,12 @@ expo-speech-recognition implements the iOS [`SFSpeechRecognizer`](https://develo
 - [Muting the beep sound on Android](#muting-the-beep-sound-on-android)
 - [Improving accuracy of single-word prompts](#improving-accuracy-of-single-word-prompts)
 - [Language Detection](#language-detection)
+- [iOS 26+ SpeechAnalyzer](#ios-26-speechanalyzer)
+  - [How Engine Selection Works](#how-engine-selection-works)
+  - [SpeechAnalyzer Options](#speechanalyzer-options)
+  - [SpeechAnalyzer Events](#speechanalyzer-events)
+  - [SpeechAnalyzer Asset Management](#speechanalyzer-asset-management)
+  - [Behavior Differences](#behavior-differences)
 - [Platform Compatibility Table](#platform-compatibility-table)
 - [Common Troubleshooting issues](#common-troubleshooting-issues)
   - [Android issues](#android-issues)
@@ -362,6 +368,8 @@ The following events are supported:
 | `start`             | Speech recognition has started                                                             | Use this event to indicate to the user when to speak.                                                                                                                                                                                                                                    |
 | `volumechange`      | Fired when the input volume changes.                                                       | Returns a value between -2 and 10 indicating the volume of the input audio. Consider anything below 0 to be inaudible.                                                                                                                                                                   |
 | `languagedetection` | Called when the language detection (and switching) results are available.                  | Android 14+ only with `com.google.android.as`. Enabled with `EXTRA_ENABLE_LANGUAGE_DETECTION` in the `androidIntent` option when starting. Also can be called multiple times by enabling `EXTRA_ENABLE_LANGUAGE_SWITCH`.                                                                 |
+| `engineselected`    | Fired when recognition starts, indicating which engine was selected.                       | iOS 26+ only. Returns `{ engine: "SpeechAnalyzer" \| "SFSpeechRecognizer", reason: string }`. See [iOS 26+ SpeechAnalyzer](#ios-26-speechanalyzer).                                                                                                                                       |
+| `assetrequired`     | Fired when SpeechAnalyzer assets are required but not installed.                           | iOS 26+ only. Returns `{ locale: string, status: "not_installed" \| "installing", progress: number \| null }`. See [iOS 26+ SpeechAnalyzer](#ios-26-speechanalyzer).                                                                                                                      |
 
 ## Handling Errors
 
@@ -404,6 +412,8 @@ The error code is based on the [Web Speech API error codes](https://developer.mo
 | `client`                 | An unknown client-side error. Corresponds with `SpeechRecognizer.ERROR_CLIENT`. |
 | `speech-timeout`         | (Android) No speech input.                                                      |
 | `unknown`                | (Android) Unknown error                                                         |
+| `asset-not-installed`    | (iOS 26+) SpeechAnalyzer assets not downloaded for the requested locale.        |
+| `asset-download-failed`  | (iOS 26+) SpeechAnalyzer asset download failed.                                 |
 
 ### Advanced error handling
 
@@ -777,27 +787,214 @@ ExpoSpeechRecognitionModule.start({
 });
 ```
 
+## iOS 26+ SpeechAnalyzer
+
+> [!NOTE]
+> This feature requires iOS 26 or later. On older iOS versions, the library automatically uses `SFSpeechRecognizer`.
+
+iOS 26 introduces [`SpeechAnalyzer`](https://developer.apple.com/documentation/speech/speechanalyzer), Apple's next-generation speech recognition API that replaces `SFSpeechRecognizer`. This library automatically selects the appropriate engine based on your device and options.
+
+**Key benefits of SpeechAnalyzer:**
+- Fully on-device processing (better privacy)
+- Improved accuracy for long-form audio (lectures, meetings)
+- Better distant audio handling
+- Native Swift async/await support
+
+**Trade-offs:**
+- `contextualStrings` is not supported (falls back to legacy engine)
+- `maxAlternatives` is not supported (single best result only)
+- Requires on-device asset downloads per locale
+- SpeechAnalyzer models emit punctuated text; `addsPunctuation: false` applies post-processing to strip punctuation
+
+### How Engine Selection Works
+
+The library automatically selects the best engine based on your options and device capabilities:
+
+```
+iOS < 26 → SFSpeechRecognizer (legacy)
+iOS >= 26:
+  ├─ iosForceLegacyEngine: true → SFSpeechRecognizer
+  ├─ contextualStrings provided → SFSpeechRecognizer (automatic fallback)
+  ├─ Asset not installed:
+  │   ├─ iosSpeechAnalyzerAssetPolicy: "auto" → SFSpeechRecognizer (silent fallback)
+  │   ├─ iosSpeechAnalyzerAssetPolicy: "require" → Error: "asset-not-installed"
+  │   └─ iosSpeechAnalyzerAssetPolicy: "download" → Trigger download, use SFSpeechRecognizer
+  └─ Asset installed → SpeechAnalyzer
+```
+
+You can listen to the `engineselected` event to know which engine is being used:
+
+```tsx
+import { useSpeechRecognitionEvent } from "expo-speech-recognition";
+
+useSpeechRecognitionEvent("engineselected", (event) => {
+  console.log("Engine:", event.engine); // "SpeechAnalyzer" | "SFSpeechRecognizer"
+  console.log("Reason:", event.reason);
+  // Reasons: "ios_version" | "asset_installed" | "asset_not_installed" |
+  //          "force_legacy" | "contextual_strings" | "android"
+});
+```
+
+### SpeechAnalyzer Options
+
+The following options are specific to iOS 26+ SpeechAnalyzer:
+
+```ts
+ExpoSpeechRecognitionModule.start({
+  lang: "en-US",
+  // ... other options ...
+
+  // [iOS 26+] Force use of legacy SFSpeechRecognizer.
+  // Useful when you need contextualStrings or prefer the legacy behavior.
+  // Default: false
+  iosForceLegacyEngine: false,
+
+  // [iOS 26+] Controls behavior when SpeechAnalyzer assets aren't installed.
+  // - "auto": Silently fallback to SFSpeechRecognizer (default)
+  // - "require": Emit 'asset-not-installed' error, don't fallback
+  // - "download": Auto-trigger download, use SFSpeechRecognizer meanwhile
+  // Default: "auto"
+  iosSpeechAnalyzerAssetPolicy: "auto",
+});
+```
+
+### SpeechAnalyzer Events
+
+Two new events are available for iOS 26+:
+
+| Event Name       | Description                                                                 | Notes                                                    |
+| ---------------- | --------------------------------------------------------------------------- | -------------------------------------------------------- |
+| `engineselected` | Fired when recognition starts, indicating which engine was selected         | Includes `engine` and `reason` fields                    |
+| `assetrequired`  | Fired when SpeechAnalyzer assets are required but not installed             | Includes `locale`, `status`, and `progress` fields       |
+
+```tsx
+import { useSpeechRecognitionEvent } from "expo-speech-recognition";
+
+// Track which engine is being used
+useSpeechRecognitionEvent("engineselected", (event) => {
+  console.log(`Using ${event.engine} because: ${event.reason}`);
+});
+
+// Handle asset requirements (e.g., prompt user to download)
+useSpeechRecognitionEvent("assetrequired", (event) => {
+  console.log(`Assets required for locale: ${event.locale}`);
+  console.log(`Status: ${event.status}`); // "not_installed" | "installing"
+  console.log(`Progress: ${event.progress}`); // number | null
+});
+```
+
+### SpeechAnalyzer Asset Management
+
+SpeechAnalyzer requires on-device assets to be downloaded for each locale. The following functions help manage these assets:
+
+```ts
+import { ExpoSpeechRecognitionModule } from "expo-speech-recognition";
+
+// Check the asset status for a specific locale
+const status = await ExpoSpeechRecognitionModule.getSpeechAnalyzerAssetStatus("en-US");
+console.log(status);
+// { locale: "en-US", status: "installed" | "not_installed" | "installing" | "not_available", progress: null }
+
+// Optional: query dictation-mode assets instead of default speech assets
+const dictationStatus = await ExpoSpeechRecognitionModule.getSpeechAnalyzerAssetStatus(
+  "en-US",
+  { iosTranscriberType: "dictation" },
+);
+
+// Trigger asset download for a locale
+const result = await ExpoSpeechRecognitionModule.downloadSpeechAnalyzerAsset("en-US");
+console.log(result); // { status: "download_started", locale: "en-US" }
+
+// Optional: trigger dictation-mode asset download
+await ExpoSpeechRecognitionModule.downloadSpeechAnalyzerAsset("en-US", {
+  addsPunctuation: true,
+});
+
+// Get all available SpeechAnalyzer locales with their status
+const locales = await ExpoSpeechRecognitionModule.getSpeechAnalyzerLocales();
+console.log(locales);
+// [{ locale: "en-US", status: "installed", progress: null }, ...]
+
+// Check which engine would be selected for given options (without starting recognition)
+const preferred = await ExpoSpeechRecognitionModule.getPreferredEngine({
+  locale: "en-US",
+  iosForceLegacyEngine: false,
+});
+console.log(preferred);
+// { engine: "SpeechAnalyzer", reason: "asset_installed" }
+```
+
+### Behavior Differences
+
+There are some important behavioral differences between `SpeechAnalyzer` and the legacy `SFSpeechRecognizer`:
+
+| Feature              | SFSpeechRecognizer (Legacy)           | SpeechAnalyzer (iOS 26+)                                    |
+| -------------------- | ------------------------------------- | ----------------------------------------------------------- |
+| **Punctuation**      | Controlled by `addsPunctuation`       | Model is punctuated; `addsPunctuation: false` strips punctuation |
+| **contextualStrings**| Supported                             | Not supported (falls back to legacy)                        |
+| **maxAlternatives**  | Supported (1-5 alternatives)          | Not supported (single result only)                          |
+| **On-device**        | Optional (`requiresOnDeviceRecognition`) | Always on-device                                         |
+| **Asset download**   | Not required                          | Required per locale                                         |
+| **Network usage**    | Optional (server-based available)     | Never uses network for recognition                          |
+
+#### Punctuation Behavior
+
+On iOS 26+, SpeechAnalyzer models naturally output punctuated text. This module preserves API compatibility:
+
+- `addsPunctuation: true` keeps punctuation
+- `addsPunctuation: false` strips punctuation from emitted transcripts and segments
+
+If you want Apple's unmodified punctuated output regardless of option handling, force dictation-style behavior with:
+
+```ts
+ExpoSpeechRecognitionModule.start({
+  lang: "en-US",
+  addsPunctuation: true,
+  iosTranscriberType: "dictation",
+});
+```
+
+#### contextualStrings Fallback
+
+When you provide `contextualStrings`, the library automatically falls back to `SFSpeechRecognizer` since `SpeechAnalyzer` doesn't support custom vocabulary:
+
+```ts
+ExpoSpeechRecognitionModule.start({
+  lang: "en-US",
+  // This will automatically use SFSpeechRecognizer on iOS 26+
+  contextualStrings: ["Carlsen", "Nepomniachtchi", "Praggnanandhaa"],
+});
+
+// Listen to confirm which engine was used
+useSpeechRecognitionEvent("engineselected", (event) => {
+  // event.engine === "SFSpeechRecognizer"
+  // event.reason === "contextual_strings"
+});
+```
+
 ## Platform Compatibility Table
 
 As of 12 July 2025, the following platforms are supported:
 
 ### Mobile Platforms (React Native)
 
-| Feature                             | Android 12- | Android 13 | Android 14+ | iOS 17+ | Notes                                                                           |
-| ----------------------------------- | ----------- | ---------- | ----------- | ------- | ------------------------------------------------------------------------------- |
-| **Basic Speech Recognition**        | ✅          | ✅         | ✅          | ✅      | Core functionality                                                              |
-| **Continuous Recognition**          | ❌          | ✅         | ✅          | ✅      | Android 12- not supported                                                       |
-| **Interim Results**                 | ✅          | ✅         | ✅          | ✅      | Real-time partial results                                                       |
-| **On-Device Recognition**           | ❌          | ✅         | ✅          | ✅      | Requires language model download on Android                                     |
-| **Audio Recording**                 | ❌          | ✅         | ✅          | ✅      | Persist audio to filesystem                                                     |
-| **Audio File Transcription**        | ❌          | ✅         | ✅          | ✅      | Transcribe from a local file URI                                                |
-| **Volume Metering**                 | ✅          | ✅         | ✅          | ✅      | Real-time volume levels                                                         |
-| **Voice Processing**                | ❌          | ❌         | ❌          | ✅      | iOS: Prevent microphone feedback                                                |
-| **Contextual Strings**              | ✅          | ✅         | ✅          | ✅      | Custom vocabulary bias. Seems to work better on iOS.                            |
-| **Punctuation (`addsPunctuation`)** | ❌          | ✅ \*      | ✅ \*       | ✅      | \*Android: Only with on-device recognition                                      |
-| **Language Detection**              | ❌          | ❌         | ✅ \*       | ❌      | \*Android: only with on-device recognition                                      |
-| **Word Confidence & Timing**        | ❌          | ❌         | ✅ \*       | ✅      | \*Android: only with on-device recognition                                      |
-| **Offensive Word Masking**          | ❌          | ✅         | ✅          | ❌      | Android 13+ with `EXTRA_MASK_OFFENSIVE_WORDS` enabled in `androidIntentOptions` |
+| Feature                             | Android 12- | Android 13 | Android 14+ | iOS 17-25 | iOS 26+ | Notes                                                                           |
+| ----------------------------------- | ----------- | ---------- | ----------- | --------- | ------- | ------------------------------------------------------------------------------- |
+| **Basic Speech Recognition**        | ✅          | ✅         | ✅          | ✅        | ✅      | Core functionality                                                              |
+| **Continuous Recognition**          | ❌          | ✅         | ✅          | ✅        | ✅      | Android 12- not supported                                                       |
+| **Interim Results**                 | ✅          | ✅         | ✅          | ✅        | ✅      | Real-time partial results                                                       |
+| **On-Device Recognition**           | ❌          | ✅         | ✅          | ✅        | ✅ \*\* | \*\*iOS 26+ SpeechAnalyzer is always on-device                                  |
+| **Audio Recording**                 | ❌          | ✅         | ✅          | ✅        | ✅      | Persist audio to filesystem                                                     |
+| **Audio File Transcription**        | ❌          | ✅         | ✅          | ✅        | ✅      | Transcribe from a local file URI                                                |
+| **Volume Metering**                 | ✅          | ✅         | ✅          | ✅        | ✅      | Real-time volume levels                                                         |
+| **Voice Processing**                | ❌          | ❌         | ❌          | ✅        | ✅      | iOS: Prevent microphone feedback                                                |
+| **Contextual Strings**              | ✅          | ✅         | ✅          | ✅        | ⚠️ \*\* | \*\*iOS 26+: Falls back to legacy SFSpeechRecognizer                            |
+| **Punctuation (`addsPunctuation`)** | ❌          | ✅ \*      | ✅ \*       | ✅        | ✅ \*\* | \*Android: On-device only. \*\*iOS 26+ SpeechAnalyzer applies punctuation-aware output handling |
+| **Language Detection**              | ❌          | ❌         | ✅ \*       | ❌        | ❌      | \*Android: only with on-device recognition                                      |
+| **Word Confidence & Timing**        | ❌          | ❌         | ✅ \*       | ✅        | ✅      | \*Android: only with on-device recognition                                      |
+| **Offensive Word Masking**          | ❌          | ✅         | ✅          | ❌        | ❌      | Android 13+ with `EXTRA_MASK_OFFENSIVE_WORDS` enabled in `androidIntentOptions` |
+| **SpeechAnalyzer Engine**           | ❌          | ❌         | ❌          | ❌        | ✅      | New iOS 26+ engine with improved accuracy                                       |
+| **Engine Selection Events**         | ❌          | ❌         | ❌          | ❌        | ✅      | `engineselected` and `assetrequired` events                                     |
 
 ### Web Platforms
 
@@ -1237,8 +1434,11 @@ graph TB
 
     subgraph "iOS Native"
         IOS_MOD[ExpoSpeechRecognitionModule.swift]
-        IOS_REC[ExpoSpeechRecognizer.swift]
+        IOS_FACTORY[SpeechRecognitionEngineFactory]
+        IOS_LEGACY[LegacySpeechRecognizer]
+        IOS_ANALYZER[SpeechAnalyzerEngine<br/>iOS 26+ only]
         SF[SFSpeechRecognizer]
+        SA[SpeechAnalyzer]
         AVAUDIO[AVAudioEngine]
     end
 
@@ -1260,9 +1460,13 @@ graph TB
     EXPO --> AND_MOD
     EXPO --> WEB_MOD
 
-    IOS_MOD --> IOS_REC
-    IOS_REC --> SF
-    IOS_REC --> AVAUDIO
+    IOS_MOD --> IOS_FACTORY
+    IOS_FACTORY --> IOS_LEGACY
+    IOS_FACTORY --> IOS_ANALYZER
+    IOS_LEGACY --> SF
+    IOS_LEGACY --> AVAUDIO
+    IOS_ANALYZER --> SA
+    IOS_ANALYZER --> AVAUDIO
 
     AND_MOD --> AND_SVC
     AND_SVC --> ANDROID_SR
@@ -1273,6 +1477,8 @@ graph TB
 
     style MODULE fill:#f3e5f5,color:#000000
     style IOS_MOD fill:#e8f5e8,color:#000000
+    style IOS_FACTORY fill:#c8e6c9,color:#000000
+    style IOS_ANALYZER fill:#a5d6a7,color:#000000
     style AND_MOD fill:#fff3e0,color:#000000
     style WEB fill:#fce4ec,color:#000000
     style WEB_MOD fill:#e1f5fe,color:#000000

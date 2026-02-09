@@ -132,6 +132,14 @@ export type LanguageDetectionEvent = {
   topLocaleAlternatives: string[];
 };
 
+export type EngineSelectionReason =
+  | "ios_version"
+  | "asset_installed"
+  | "asset_not_installed"
+  | "force_legacy"
+  | "contextual_strings"
+  | "android";
+
 /**
  * Events that are dispatched from the native side
  */
@@ -188,13 +196,7 @@ export type ExpoSpeechRecognitionNativeEventMap = {
     /** The speech recognition engine that was selected */
     engine: "SpeechAnalyzer" | "SFSpeechRecognizer";
     /** The reason why this engine was selected */
-    reason:
-      | "ios_version"
-      | "asset_installed"
-      | "asset_not_installed"
-      | "force_legacy"
-      | "contextual_strings"
-      | "android";
+    reason: EngineSelectionReason;
   };
   /**
    * [iOS 26+] Fired when SpeechAnalyzer assets are required but not installed.
@@ -248,7 +250,11 @@ export type ExpoSpeechRecognitionOptions = {
    *
    * Note for Android: This feature is only verified to work on Android 13+ with on-device speech recognition enabled (i.e. enabling `requiresOnDeviceRecognition` or using the `com.google.android.as` service package)
    *
-   * On iOS, this configures [`SFSpeechRecognitionRequest.addsPunctuation`](https://developer.apple.com/documentation/speech/sfspeechrecognitionrequest/3930023-addspunctuation).
+   * On iOS 13.4-25.x, this configures [`SFSpeechRecognitionRequest.addsPunctuation`](https://developer.apple.com/documentation/speech/sfspeechrecognitionrequest/3930023-addspunctuation).
+   *
+   * On iOS 26+ with SpeechAnalyzer, punctuation handling is normalized by this module:
+   * - `true`: keep punctuation in emitted transcripts
+   * - `false`: strip punctuation from emitted transcripts
    */
   addsPunctuation?: boolean;
   /**
@@ -675,13 +681,31 @@ export type EngineSelectionInfo = {
   /** The speech recognition engine that was selected */
   engine: "SpeechAnalyzer" | "SFSpeechRecognizer";
   /** The reason why this engine was selected */
-  reason:
-    | "ios_version"
-    | "asset_installed"
-    | "asset_not_installed"
-    | "force_legacy"
-    | "contextual_strings"
-    | "android";
+  reason: EngineSelectionReason;
+};
+
+/**
+ * [iOS 26+] Optional asset query configuration.
+ * Use this when you want asset checks/downloads for dictation mode specifically.
+ */
+export type SpeechAnalyzerAssetQueryOptions = {
+  /**
+   * [iOS 26+] Transcriber used for the asset check/download.
+   *
+   * - "speech": SpeechTranscriber assets
+   * - "dictation": DictationTranscriber assets
+   */
+  iosTranscriberType?: "speech" | "dictation";
+  /**
+   * [iOS 26+] Shortcut for dictation-style asset checks.
+   * When true, dictation assets are queried/downloaded.
+   */
+  addsPunctuation?: boolean;
+};
+
+export type PreferredEngineSelectionInfo = {
+  engine: "SpeechAnalyzer" | "SFSpeechRecognizer" | "Android";
+  reason: EngineSelectionReason;
 };
 
 export declare class ExpoSpeechRecognitionModuleType extends NativeModule<ExpoSpeechRecognitionNativeEvents> {
@@ -871,18 +895,21 @@ export declare class ExpoSpeechRecognitionModuleType extends NativeModule<ExpoSp
    * Returns "not_available" status on iOS versions prior to 26.
    *
    * @param locale - The locale to check, e.g. "en-US"
+   * @param options - Optional transcriber query options. Defaults to SpeechTranscriber assets.
    */
   getSpeechAnalyzerAssetStatus(
     locale: string,
+    options?: SpeechAnalyzerAssetQueryOptions,
   ): Promise<SpeechAnalyzerAssetStatus>;
 
   /**
    * [iOS 26+ only] Trigger download of SpeechAnalyzer assets for a locale.
    *
    * @param locale - The locale to download, e.g. "en-US"
+   * @param options - Optional transcriber query options. Defaults to SpeechTranscriber assets.
    * @throws On iOS < 26 or if download fails
    */
-  downloadSpeechAnalyzerAsset(locale: string): Promise<{
+  downloadSpeechAnalyzerAsset(locale: string, options?: SpeechAnalyzerAssetQueryOptions): Promise<{
     status: "download_started";
     locale: string;
   }>;
@@ -890,9 +917,11 @@ export declare class ExpoSpeechRecognitionModuleType extends NativeModule<ExpoSp
   /**
    * [iOS 26+ only] Get all available SpeechAnalyzer locales with their installation status.
    *
+   * @param options - Optional transcriber query options. Defaults to SpeechTranscriber assets.
+   *
    * Returns empty array on iOS < 26.
    */
-  getSpeechAnalyzerLocales(): Promise<SpeechAnalyzerAssetStatus[]>;
+  getSpeechAnalyzerLocales(options?: SpeechAnalyzerAssetQueryOptions): Promise<SpeechAnalyzerAssetStatus[]>;
 
   /**
    * Returns information about which speech recognition engine would be used
@@ -902,11 +931,13 @@ export declare class ExpoSpeechRecognitionModuleType extends NativeModule<ExpoSp
    */
   getPreferredEngine(options?: {
     locale?: string;
+    lang?: string;
     iosForceLegacyEngine?: boolean;
-  }): Promise<{
-    engine: "SpeechAnalyzer" | "SFSpeechRecognizer" | "Android";
-    reason: string;
-  }>;
+    contextualStrings?: string[];
+    addsPunctuation?: boolean;
+    iosTranscriberType?: "speech" | "dictation";
+    iosSpeechAnalyzerAssetPolicy?: "auto" | "require" | "download";
+  }): Promise<PreferredEngineSelectionInfo>;
 }
 
 export type SetCategoryOptions = {

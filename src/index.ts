@@ -45,5 +45,8 @@ export type {
   ExpoSpeechRecognitionResultSegment,
   // iOS 26+ SpeechAnalyzer types
   SpeechAnalyzerAssetStatus,
+  SpeechAnalyzerAssetQueryOptions,
   EngineSelectionInfo,
+  EngineSelectionReason,
+  PreferredEngineSelectionInfo,
 } from "./ExpoSpeechRecognitionModule.types";
