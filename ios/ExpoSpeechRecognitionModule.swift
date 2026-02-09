@@ -398,29 +398,64 @@ public class ExpoSpeechRecognitionModule: Module, SpeechRecognitionEngineDelegat
       ]
     }
 
-    // MARK: - iOS 26+ SpeechAnalyzer Functions (stub implementations for now)
+    // MARK: - iOS 26+ SpeechAnalyzer Functions
 
     AsyncFunction("getSpeechAnalyzerAssetStatus") { (locale: String, promise: Promise) in
-      // Phase 4 will implement this
-      // For now, return "not_available" since we're on pre-iOS 26
-      promise.resolve([
-        "locale": locale,
-        "status": "not_available",
-        "progress": nil,
-      ] as [String: Any?])
+      let normalizedLocale = locale.replacingOccurrences(of: "_", with: "-")
+
+      if #available(iOS 26, *) {
+        Task {
+          let locale = Locale(identifier: normalizedLocale)
+          let info = await SpeechAnalyzerAssetManager.shared.getAssetStatus(for: locale)
+          promise.resolve(self.assetInfoToDictionary(info))
+        }
+      } else {
+        promise.resolve([
+          "locale": normalizedLocale,
+          "status": SpeechAnalyzerAssetStatus.notAvailable.rawValue,
+          "progress": nil,
+        ] as [String: Any?])
+      }
     }
 
     AsyncFunction("downloadSpeechAnalyzerAsset") { (locale: String, promise: Promise) in
-      // Phase 4 will implement this
-      promise.resolve([
-        "status": "download_started",
-        "locale": locale,
-      ])
+      let normalizedLocale = locale.replacingOccurrences(of: "_", with: "-")
+
+      if #available(iOS 26, *) {
+        Task {
+          let locale = Locale(identifier: normalizedLocale)
+          do {
+            try await SpeechAnalyzerAssetManager.shared.downloadAsset(for: locale)
+            promise.resolve([
+              "status": "download_started",
+              "locale": normalizedLocale,
+            ])
+          } catch let error as SpeechRecognitionEngineError {
+            promise.reject(error.code, error.message)
+          } catch {
+            promise.reject(
+              SpeechRecognitionEngineError.assetDownloadFailed(locale: normalizedLocale).code,
+              SpeechRecognitionEngineError.assetDownloadFailed(locale: normalizedLocale).message
+            )
+          }
+        }
+      } else {
+        promise.reject(
+          SpeechRecognitionEngineError.assetDownloadFailed(locale: normalizedLocale).code,
+          "SpeechAnalyzer asset download requires iOS 26 or later."
+        )
+      }
     }
 
     AsyncFunction("getSpeechAnalyzerLocales") { (promise: Promise) in
-      // Phase 4 will implement this
-      promise.resolve([] as [[String: Any]])
+      if #available(iOS 26, *) {
+        Task {
+          let locales = await SpeechAnalyzerAssetManager.shared.getAllLocalesStatus()
+          promise.resolve(locales.map { self.assetInfoToDictionary($0) })
+        }
+      } else {
+        promise.resolve([] as [[String: Any]])
+      }
     }
 
     AsyncFunction("getPreferredEngine") {
@@ -548,6 +583,14 @@ public class ExpoSpeechRecognitionModule: Module, SpeechRecognitionEngineDelegat
     previousResult = nil
     sendEvent("error", ["error": error, "message": message])
     sendEvent("end")
+  }
+
+  func assetInfoToDictionary(_ info: SpeechAnalyzerAssetInfo) -> [String: Any?] {
+    return [
+      "locale": info.locale,
+      "status": info.status.rawValue,
+      "progress": info.progress,
+    ]
   }
 
   func handleRecognitionResult(_ result: SFSpeechRecognitionResult, maxAlternatives: Int) {

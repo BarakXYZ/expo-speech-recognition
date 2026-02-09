@@ -258,6 +258,37 @@ class ExpoSpeechRecognitionModule : Module() {
                 // Do nothing
             }
 
+            AsyncFunction("getSpeechAnalyzerAssetStatus") { locale: String, promise: Promise ->
+                promise.resolve(
+                    mapOf(
+                        "locale" to locale,
+                        "status" to "not_available",
+                        "progress" to null,
+                    ),
+                )
+            }
+
+            AsyncFunction("downloadSpeechAnalyzerAsset") { _: String, promise: Promise ->
+                promise.reject(
+                    "not_supported",
+                    "SpeechAnalyzer asset download is only supported on iOS 26+.",
+                    Throwable(),
+                )
+            }
+
+            AsyncFunction("getSpeechAnalyzerLocales") { promise: Promise ->
+                promise.resolve(emptyList<Map<String, Any?>>())
+            }
+
+            AsyncFunction("getPreferredEngine") { _: Map<String, Any>?, promise: Promise ->
+                promise.resolve(
+                    mapOf(
+                        "engine" to "Android",
+                        "reason" to "android",
+                    ),
+                )
+            }
+
             var isDownloadingModel = false
 
             AsyncFunction("androidTriggerOfflineModelDownload") { options: TriggerOfflineModelDownloadOptions, promise: Promise ->
