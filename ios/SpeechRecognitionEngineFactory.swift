@@ -53,6 +53,8 @@ class SpeechRecognitionEngineFactory {
       if isInstalled {
         // Assets installed - use SpeechAnalyzer
         print("[EngineFactory] Using SpeechAnalyzer: assets installed for \(locale.identifier)")
+        delegate?.onEngineSelected(
+          EngineSelectionInfo(engine: .speechAnalyzer, reason: .assetInstalled))
         return try await SpeechAnalyzerEngine(locale: locale)
       }
 

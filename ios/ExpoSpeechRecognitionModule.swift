@@ -200,6 +200,26 @@ public class ExpoSpeechRecognitionModule: Module, SpeechRecognitionEngineDelegat
             return
           }
 
+          // Check permissions before engine creation to avoid side effects
+          // (e.g. triggering asset downloads) when authorization is missing.
+          if !options.requiresOnDeviceRecognition {
+            guard await SFSpeechRecognizer.hasAuthorizationToRecognize() else {
+              sendErrorAndStop(
+                error: "not-allowed",
+                message: RecognizerError.notAuthorizedToRecognize.message
+              )
+              return
+            }
+          }
+
+          guard await AVAudioSession.sharedInstance().hasPermissionToRecord() else {
+            sendErrorAndStop(
+              error: "not-allowed",
+              message: RecognizerError.notPermittedToRecord.message
+            )
+            return
+          }
+
           // Determine whether to recreate the engine
           // iOS 26+: Always recreate - engine selection depends on options AND asset status
           // iOS < 26: Only recreate when locale changes - engine is always SFSpeechRecognizer
@@ -221,37 +241,16 @@ public class ExpoSpeechRecognitionModule: Module, SpeechRecognitionEngineDelegat
             )
           }
 
-          if !options.requiresOnDeviceRecognition {
-            guard await SFSpeechRecognizer.hasAuthorizationToRecognize() else {
-              sendErrorAndStop(
-                error: "not-allowed",
-                message: RecognizerError.notAuthorizedToRecognize.message
-              )
-              return
-            }
-          }
-
-          guard await AVAudioSession.sharedInstance().hasPermissionToRecord() else {
-            sendErrorAndStop(
-              error: "not-allowed",
-              message: RecognizerError.notPermittedToRecord.message
-            )
-            return
-          }
-
           // Start recognition using the engine's delegate-based API
           try await speechRecognizer?.start(
             options: options,
             delegate: self
           )
         } catch {
-          self.sendEvent(
-            "error",
-            [
-              "error": "not-allowed",
-              "message": error.localizedDescription,
-            ]
-          )
+          self.hasSeenFinalResult = false
+          self.previousResult = nil
+          self.handleRecognitionError(error)
+          self.sendEvent("end")
         }
       }
     }
@@ -460,25 +459,39 @@ public class ExpoSpeechRecognitionModule: Module, SpeechRecognitionEngineDelegat
 
     AsyncFunction("getPreferredEngine") {
       (options: [String: Any]?, promise: Promise) in
-      let locale = options?["locale"] as? String
+      let localeIdentifier = (options?["locale"] as? String)?.replacingOccurrences(of: "_", with: "-")
       let iosForceLegacyEngine = options?["iosForceLegacyEngine"] as? Bool ?? false
+      let contextualStrings = options?["contextualStrings"] as? [String]
 
-      // Use the factory to determine which engine would be selected
-      var recognitionOptions: SpeechRecognitionOptions? = nil
-      if iosForceLegacyEngine {
-        recognitionOptions = SpeechRecognitionOptions()
-        // Note: We'd set iosForceLegacyEngine here but it's handled by the factory logic
+      let recognitionOptions = SpeechRecognitionOptions()
+      recognitionOptions.iosForceLegacyEngine = iosForceLegacyEngine
+      recognitionOptions.contextualStrings = contextualStrings
+
+      Task {
+        if #available(iOS 26, *) {
+          let locale = Locale(identifier: localeIdentifier ?? "en-US")
+          let info = await SpeechRecognitionEngineFactory.getPreferredEngineAsync(
+            locale: locale,
+            options: recognitionOptions
+          )
+
+          promise.resolve([
+            "engine": info.engine.rawValue,
+            "reason": info.reason.rawValue,
+          ])
+          return
+        }
+
+        let info = SpeechRecognitionEngineFactory.getPreferredEngine(
+          locale: localeIdentifier,
+          options: recognitionOptions
+        )
+
+        promise.resolve([
+          "engine": info.engine.rawValue,
+          "reason": info.reason.rawValue,
+        ])
       }
-
-      let info = SpeechRecognitionEngineFactory.getPreferredEngine(
-        locale: locale,
-        options: recognitionOptions
-      )
-
-      promise.resolve([
-        "engine": info.engine.rawValue,
-        "reason": info.reason.rawValue,
-      ])
     }
   }
 
