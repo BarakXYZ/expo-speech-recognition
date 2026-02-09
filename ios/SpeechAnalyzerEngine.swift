@@ -292,8 +292,7 @@ actor SpeechAnalyzerEngine: SpeechRecognitionEngine {
           delegate.onError(
             SpeechRecognitionEngineError.assetNotInstalled(locale: locale.identifier))
         case .localeReservationFailed:
-          delegate.onError(
-            SpeechRecognitionEngineError.assetNotInstalled(locale: locale.identifier))
+          delegate.onError(SpeechRecognitionEngineError.analyzerUnavailable)
         default:
           delegate.onError(SpeechRecognitionEngineError.analyzerUnavailable)
         }
@@ -1395,24 +1394,6 @@ extension SpeechAnalyzerEngine {
     return await AssetInventory.reservedLocales
   }
 
-  /// Request asset installation for a locale
-  static func requestAssetInstallation(for locale: Locale, useDictation: Bool = false) async throws
-    -> Progress?
-  {
-    let module = createAssetModule(locale: locale, useDictation: useDictation)
-
-    if let downloader = try await AssetInventory.assetInstallationRequest(supporting: [module])
-    {
-      // Start download in background
-      Task {
-        try? await downloader.downloadAndInstall()
-      }
-      return downloader.progress
-    }
-
-    return nil
-  }
-
   /// Reserve a locale for use (must be called before using SpeechAnalyzer with that locale)
   static func reserveLocale(_ locale: Locale) async throws {
     let reserved = await AssetInventory.reservedLocales
@@ -1426,24 +1407,5 @@ extension SpeechAnalyzerEngine {
   /// Release a reserved locale
   static func releaseLocale(_ locale: Locale) async {
     await AssetInventory.release(reservedLocale: locale)
-  }
-
-  private static func createAssetModule(locale: Locale, useDictation: Bool) -> any SpeechModule {
-    if useDictation {
-      return DictationTranscriber(
-        locale: locale,
-        contentHints: [],
-        transcriptionOptions: [.punctuation],
-        reportingOptions: [],
-        attributeOptions: []
-      )
-    }
-
-    return SpeechTranscriber(
-      locale: locale,
-      transcriptionOptions: [],
-      reportingOptions: [],
-      attributeOptions: []
-    )
   }
 }

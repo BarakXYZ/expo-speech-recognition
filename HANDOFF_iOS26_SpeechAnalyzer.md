@@ -2,7 +2,7 @@
 
 > Last Updated: 2026-02-09
 > Branch: `feat/ios26-speech-analyzer`
-> Status: Production-ready implementation completed with strict review and phased hardening.
+> Status: Hardened after strict audit; production-ready with documented residual runtime risks.
 
 ## Goal
 Integrate iOS 26 `SpeechAnalyzer` into the existing `expo-speech-recognition` codebase while preserving behavior and parity for legacy iOS, Android, and web.
@@ -27,6 +27,45 @@ The iOS 26 integration is implemented and validated end-to-end in native/module/
 - `2cddc3d` feat(ios): add dictation transcriber path and stream lifecycle stop
 - `7330eae` feat(ios): make SpeechAnalyzer asset APIs transcriber-aware and align contracts
 - `fc8b461` feat(example): add iOS 26 SpeechAnalyzer controls and live asset status panel
+- `48431ef` fix(ios): harden locale resolution and reservation lifecycle
+- `4dade06` fix(ios): make asset installation status and dictation modules consistent
+
+## Post-Audit Hardening (2026-02-09)
+
+### 1) Locale gating now supports SpeechAnalyzer locales
+- `start()` locale resolution now checks SpeechAnalyzer support when eligible, not just `SFSpeechRecognizer` locales.
+- Prevents false `language-not-supported` for iOS 26 locales that are valid for SpeechAnalyzer.
+
+### 2) SpeechAnalyzer init no longer assumes speech-only locale support
+- `SpeechAnalyzerEngine` validates locale against both `SpeechTranscriber` and `DictationTranscriber`.
+- Prevents dictation-only locale rejection.
+
+### 3) Locale reservation lifecycle is now bounded
+- Reservations are released during reset for locales reserved by the current engine instance.
+- Ownership is tracked to avoid releasing reservations owned by other sessions.
+- Guards against locale-slot exhaustion (`AssetInventory.maximumReservedLocales`).
+
+### 4) Asset install APIs now return truthful outcomes
+- `downloadSpeechAnalyzerAsset()` now returns:
+  - `installed`
+  - `already_installed`
+  - `already_downloading`
+- Completion failures now throw `asset-download-failed` instead of being silently swallowed.
+
+### 5) Dictation asset module consistency fixed
+- Dictation asset module creation is now aligned across all internal code paths.
+
+### 6) Engine reason taxonomy improved
+- Added `locale_not_supported` reason to engine-selection outputs.
+- Unsupported locale fallback no longer reports misleading `ios_version`.
+
+### 7) Engine recreation cleanup improved
+- Existing engine instance is aborted before recreation to avoid stale lifecycle state.
+
+### 8) Contract guard added
+- Added compile-time guard file `src/ios26ContractGuards.ts` to pin iOS 26 contract invariants:
+  - `locale_not_supported` reason presence
+  - `downloadSpeechAnalyzerAsset` status variants
 
 ## Strict Findings Fixed
 
@@ -86,6 +125,7 @@ These are outside code correctness and need live-device runtime validation:
 - Real-world permission edge cases (user denies speech permission but allows mic) across iOS 17-26 policy variants.
 - Background asset download UX and timing on low connectivity.
 - Extended stress testing for interruption/route-change recovery under long sessions.
+- No dedicated runtime unit-test harness for iOS native engine logic yet (current guard is compile-time contract validation).
 
 ## Recommended Final Manual Test Matrix
 - iOS 26 device:

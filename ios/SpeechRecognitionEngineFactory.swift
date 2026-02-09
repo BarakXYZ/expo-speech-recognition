@@ -50,7 +50,7 @@ class SpeechRecognitionEngineFactory {
           "[EngineFactory] Using legacy engine: locale \(locale.identifier) not supported by SpeechAnalyzer"
         )
         delegate?.onEngineSelected(
-          EngineSelectionInfo(engine: .sfSpeechRecognizer, reason: .iosVersion))
+          EngineSelectionInfo(engine: .sfSpeechRecognizer, reason: .localeNotSupported))
         return try await LegacySpeechRecognizer(locale: locale)
       }
 
@@ -94,15 +94,11 @@ class SpeechRecognitionEngineFactory {
         // Start asset download in background
         Task {
           do {
-            let progress = try await SpeechAnalyzerEngine.requestAssetInstallation(
+            let result = try await SpeechAnalyzerAssetManager.shared.downloadAsset(
               for: locale,
               useDictation: useDictation
             )
-            if let progress = progress {
-              // Could emit progress updates here
-              print("[EngineFactory] Asset download started, progress: \(progress.fractionCompleted)"
-              )
-            }
+            print("[EngineFactory] Asset download result for \(locale.identifier): \(result.rawValue)")
           } catch {
             print("[EngineFactory] Asset download failed: \(error)")
           }
@@ -193,7 +189,7 @@ class SpeechRecognitionEngineFactory {
       useDictation: useDictation
     )
     if !isSupported {
-      return EngineSelectionInfo(engine: .sfSpeechRecognizer, reason: .iosVersion)
+      return EngineSelectionInfo(engine: .sfSpeechRecognizer, reason: .localeNotSupported)
     }
 
     // Check asset installation

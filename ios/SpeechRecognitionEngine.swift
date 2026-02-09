@@ -111,6 +111,7 @@ enum EngineSelectionReason: String {
   case iosVersion = "ios_version"
   case assetInstalled = "asset_installed"
   case assetNotInstalled = "asset_not_installed"
+  case localeNotSupported = "locale_not_supported"
   case forceLegacy = "force_legacy"
   case contextualStrings = "contextual_strings"
   case android = "android"

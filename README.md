@@ -831,6 +831,7 @@ useSpeechRecognitionEvent("engineselected", (event) => {
   console.log("Engine:", event.engine); // "SpeechAnalyzer" | "SFSpeechRecognizer"
   console.log("Reason:", event.reason);
   // Reasons: "ios_version" | "asset_installed" | "asset_not_installed" |
+  //          "locale_not_supported" |
   //          "force_legacy" | "contextual_strings" | "android"
 });
 ```

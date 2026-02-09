@@ -136,6 +136,7 @@ export type EngineSelectionReason =
   | "ios_version"
   | "asset_installed"
   | "asset_not_installed"
+  | "locale_not_supported"
   | "force_legacy"
   | "contextual_strings"
   | "android";

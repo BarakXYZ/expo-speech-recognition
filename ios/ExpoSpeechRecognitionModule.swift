@@ -234,6 +234,9 @@ public class ExpoSpeechRecognitionModule: Module, SpeechRecognitionEngineDelegat
           }
 
           if shouldRecreateEngine {
+            if let existingEngine = self.speechRecognizer {
+              await existingEngine.abort()
+            }
             self.speechRecognizer = try await SpeechRecognitionEngineFactory.createEngine(
               locale: locale,
               options: options,

@@ -96,7 +96,7 @@ actor LegacySpeechRecognizer: SpeechRecognitionEngine {
     await setDelegate(delegate)
 
     // Note: engineselected event is emitted by the factory with the correct reason
-    // (e.g., contextualStrings, forceLegacy, assetNotInstalled, iosVersion)
+    // (e.g., contextualStrings, forceLegacy, assetNotInstalled, localeNotSupported, iosVersion)
 
     // Set up handlers exactly like original
     self.endHandler = { delegate.onEnd() }
