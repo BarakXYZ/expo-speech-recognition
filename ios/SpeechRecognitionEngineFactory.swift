@@ -36,8 +36,15 @@ class SpeechRecognitionEngineFactory {
         return try await LegacySpeechRecognizer(locale: locale)
       }
 
+      let useDictation =
+        options.iosTranscriberType == .dictation
+        || options.addsPunctuation
+
       // Check if locale is supported by SpeechAnalyzer
-      let isSupported = await SpeechAnalyzerEngine.isLocaleSupported(locale)
+      let isSupported = await SpeechAnalyzerEngine.isLocaleSupported(
+        locale,
+        useDictation: useDictation
+      )
       if !isSupported {
         print(
           "[EngineFactory] Using legacy engine: locale \(locale.identifier) not supported by SpeechAnalyzer"
@@ -48,7 +55,10 @@ class SpeechRecognitionEngineFactory {
       }
 
       // Check asset installation status
-      let isInstalled = await SpeechAnalyzerEngine.isAssetInstalled(for: locale)
+      let isInstalled = await SpeechAnalyzerEngine.isAssetInstalled(
+        for: locale,
+        useDictation: useDictation
+      )
 
       if isInstalled {
         // Assets installed - use SpeechAnalyzer
@@ -84,7 +94,10 @@ class SpeechRecognitionEngineFactory {
         // Start asset download in background
         Task {
           do {
-            let progress = try await SpeechAnalyzerEngine.requestAssetInstallation(for: locale)
+            let progress = try await SpeechAnalyzerEngine.requestAssetInstallation(
+              for: locale,
+              useDictation: useDictation
+            )
             if let progress = progress {
               // Could emit progress updates here
               print("[EngineFactory] Asset download started, progress: \(progress.fractionCompleted)"
@@ -170,14 +183,24 @@ class SpeechRecognitionEngineFactory {
       return EngineSelectionInfo(engine: .sfSpeechRecognizer, reason: .contextualStrings)
     }
 
+    let useDictation =
+      options?.iosTranscriberType == .dictation
+      || options?.addsPunctuation == true
+
     // Check locale support
-    let isSupported = await SpeechAnalyzerEngine.isLocaleSupported(locale)
+    let isSupported = await SpeechAnalyzerEngine.isLocaleSupported(
+      locale,
+      useDictation: useDictation
+    )
     if !isSupported {
       return EngineSelectionInfo(engine: .sfSpeechRecognizer, reason: .iosVersion)
     }
 
     // Check asset installation
-    let isInstalled = await SpeechAnalyzerEngine.isAssetInstalled(for: locale)
+    let isInstalled = await SpeechAnalyzerEngine.isAssetInstalled(
+      for: locale,
+      useDictation: useDictation
+    )
     if isInstalled {
       return EngineSelectionInfo(engine: .speechAnalyzer, reason: .assetInstalled)
     } else {

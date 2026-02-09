@@ -22,13 +22,19 @@ actor SpeechAnalyzerEngine: SpeechRecognitionEngine {
     case localeReservationFailed
   }
 
+  enum ActiveTranscriber {
+    case speech(SpeechTranscriber)
+    case dictation(DictationTranscriber)
+  }
+
   // MARK: - Properties
 
   private var options: SpeechRecognitionOptions?
   private var locale: Locale
   private var audioEngine: AVAudioEngine?
   private var mixerNode: AVAudioMixerNode?
-  private var transcriber: SpeechTranscriber?
+  private var speechTranscriber: SpeechTranscriber?
+  private var dictationTranscriber: DictationTranscriber?
   private var analyzer: SpeechAnalyzer?
   private var analyzerFormat: AVAudioFormat?
 
@@ -181,21 +187,29 @@ actor SpeechAnalyzerEngine: SpeechRecognitionEngine {
       try await reserveLocaleIfNeeded()
 
       // Create transcriber based on options
-      transcriber = try await createTranscriber(options: options)
+      let activeTranscriber = try await createTranscriber(options: options)
+      let analyzerModules: [any SpeechModule]
 
-      guard let transcriber = transcriber else {
-        throw AnalyzerError.failedToCreateTranscriber
+      switch activeTranscriber {
+      case .speech(let transcriber):
+        speechTranscriber = transcriber
+        dictationTranscriber = nil
+        analyzerModules = [transcriber]
+      case .dictation(let transcriber):
+        dictationTranscriber = transcriber
+        speechTranscriber = nil
+        analyzerModules = [transcriber]
       }
 
-      // Create analyzer with the transcriber module
-      analyzer = SpeechAnalyzer(modules: [transcriber])
+      // Create analyzer with the selected transcriber module
+      analyzer = SpeechAnalyzer(modules: analyzerModules)
 
       guard analyzer != nil else {
         throw AnalyzerError.failedToCreateAnalyzer
       }
 
-      // Get best audio format for the transcriber
-      analyzerFormat = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber])
+      // Get best audio format for the selected transcriber
+      analyzerFormat = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: analyzerModules)
 
       guard analyzerFormat != nil else {
         throw AnalyzerError.invalidAudioFormat
@@ -212,13 +226,25 @@ actor SpeechAnalyzerEngine: SpeechRecognitionEngine {
       let isSourcedFromFile = options.audioSource?.uri != nil
 
       // Start the results consumer task
-      resultsTask = Task {
-        await consumeResults(
-          transcriber: transcriber,
-          options: options,
-          delegate: delegate,
-          isSourcedFromFile: isSourcedFromFile
-        )
+      switch activeTranscriber {
+      case .speech(let transcriber):
+        resultsTask = Task {
+          await consumeSpeechResults(
+            transcriber: transcriber,
+            options: options,
+            delegate: delegate,
+            isSourcedFromFile: isSourcedFromFile
+          )
+        }
+      case .dictation(let transcriber):
+        resultsTask = Task {
+          await consumeDictationResults(
+            transcriber: transcriber,
+            options: options,
+            delegate: delegate,
+            isSourcedFromFile: isSourcedFromFile
+          )
+        }
       }
 
       if isSourcedFromFile {
@@ -320,48 +346,69 @@ actor SpeechAnalyzerEngine: SpeechRecognitionEngine {
   // MARK: - Transcriber Creation
 
   private func createTranscriber(options: SpeechRecognitionOptions) async throws
-    -> SpeechTranscriber
+    -> ActiveTranscriber
   {
     // Determine if we should use dictation mode
-    // DictationTranscriber provides punctuation but SpeechTranscriber is more general
+    // DictationTranscriber is preferred for explicit dictation requests and punctuation-heavy flows.
     let useDictation =
       options.iosTranscriberType == .dictation
       || options.addsPunctuation
 
     if useDictation {
-      print("[SpeechAnalyzerEngine] Using SpeechTranscriber with dictation settings for locale: \(locale.identifier)")
+      let supportedLocales = await DictationTranscriber.supportedLocales
+      let isSupported = supportedLocales.contains { supported in
+        Self.localesMatch(supported, locale)
+      }
+
+      guard isSupported else {
+        throw AnalyzerError.localeNotSupported
+      }
+
+      print("[SpeechAnalyzerEngine] Using DictationTranscriber for locale: \(locale.identifier)")
+
+      var transcriptionOptions: Set<DictationTranscriber.TranscriptionOption> = []
+      if options.addsPunctuation || options.iosTranscriberType == .dictation {
+        transcriptionOptions.insert(.punctuation)
+      }
+
+      let reportingOptions: Set<DictationTranscriber.ReportingOption> =
+        options.interimResults ? [.volatileResults] : []
+
+      let transcriber = DictationTranscriber(
+        locale: locale,
+        contentHints: [],
+        transcriptionOptions: transcriptionOptions,
+        reportingOptions: reportingOptions,
+        attributeOptions: [.audioTimeRange]
+      )
+      return .dictation(transcriber)
     } else {
       print("[SpeechAnalyzerEngine] Using SpeechTranscriber for locale: \(locale.identifier)")
-    }
 
-    // Build transcriber with appropriate options
-    // Note: Options are passed directly to initializer as per Apple's API
-    if options.interimResults {
-      return SpeechTranscriber(
+      let reportingOptions: Set<SpeechTranscriber.ReportingOption> =
+        options.interimResults ? [.volatileResults] : []
+
+      let transcriber = SpeechTranscriber(
         locale: locale,
         transcriptionOptions: [],
-        reportingOptions: [.volatileResults],
+        reportingOptions: reportingOptions,
         attributeOptions: [.audioTimeRange]
       )
-    } else {
-      return SpeechTranscriber(
-        locale: locale,
-        transcriptionOptions: [],
-        reportingOptions: [],
-        attributeOptions: [.audioTimeRange]
-      )
+      return .speech(transcriber)
     }
   }
 
   // MARK: - Results Consumer
 
-  private func consumeResults(
+  private func consumeSpeechResults(
     transcriber: SpeechTranscriber,
     options: SpeechRecognitionOptions,
     delegate: SpeechRecognitionEngineDelegate,
     isSourcedFromFile: Bool
   ) async {
-    print("[SpeechAnalyzerEngine] Starting results consumer...")
+    print("[SpeechAnalyzerEngine] Starting SpeechTranscriber results consumer...")
+
+    var streamEndedNaturally = false
 
     do {
       for try await result in transcriber.results {
@@ -396,7 +443,15 @@ actor SpeechAnalyzerEngine: SpeechRecognitionEngine {
         }
 
         // Emit result via the unified format
-        await emitResult(text: text, isFinal: isFinal, result: result, delegate: delegate)
+        // Note: SpeechAnalyzer always produces punctuated text. If addsPunctuation is false,
+        // we post-process to strip punctuation to match the expected behavior.
+        await emitResult(
+          attributedText: result.text,
+          alternatives: result.alternatives,
+          isFinal: isFinal,
+          delegate: delegate,
+          stripPunctuation: !options.addsPunctuation
+        )
 
         // If final and not continuous, we're done
         if isFinal && !options.continuous {
@@ -404,8 +459,11 @@ actor SpeechAnalyzerEngine: SpeechRecognitionEngine {
         }
       }
 
+      streamEndedNaturally = !stoppedListening
       print("[SpeechAnalyzerEngine] Results stream ended normally")
 
+    } catch is CancellationError {
+      streamEndedNaturally = false
     } catch {
       if !stoppedListening {
         print("[SpeechAnalyzerEngine] Results stream error: \(error)")
@@ -413,6 +471,90 @@ actor SpeechAnalyzerEngine: SpeechRecognitionEngine {
       }
     }
 
+    await finalizeResultsConsumption(
+      streamEndedNaturally: streamEndedNaturally,
+      delegate: delegate
+    )
+  }
+
+  private func consumeDictationResults(
+    transcriber: DictationTranscriber,
+    options: SpeechRecognitionOptions,
+    delegate: SpeechRecognitionEngineDelegate,
+    isSourcedFromFile: Bool
+  ) async {
+    print("[SpeechAnalyzerEngine] Starting DictationTranscriber results consumer...")
+
+    var streamEndedNaturally = false
+
+    do {
+      for try await result in transcriber.results {
+        // Check if we've been stopped
+        if stoppedListening {
+          break
+        }
+
+        // Emit soundstart on first result (matching legacy behavior)
+        if !hasSoundStarted {
+          hasSoundStarted = true
+          delegate.onSoundStart()
+        }
+
+        // Convert AttributedString to plain text
+        let text = String(result.text.characters)
+        let isFinal = result.isFinal
+
+        // Emit speechstart on first non-empty result
+        if !hasSpeechStarted && !text.isEmpty {
+          hasSpeechStarted = true
+          delegate.onSpeechStart()
+        }
+
+        print(
+          "[SpeechAnalyzerEngine] Result: isFinal=\(isFinal), text=\"\(text.prefix(50))\(text.count > 50 ? "..." : "")\""
+        )
+
+        // Reschedule timer on each result (matching legacy behavior for non-continuous)
+        if !options.continuous && !isSourcedFromFile {
+          await invalidateAndScheduleTimer()
+        }
+
+        await emitResult(
+          attributedText: result.text,
+          alternatives: result.alternatives,
+          isFinal: isFinal,
+          delegate: delegate,
+          stripPunctuation: !options.addsPunctuation
+        )
+
+        // If final and not continuous, we're done
+        if isFinal && !options.continuous {
+          break
+        }
+      }
+
+      streamEndedNaturally = !stoppedListening
+      print("[SpeechAnalyzerEngine] Results stream ended normally")
+
+    } catch is CancellationError {
+      streamEndedNaturally = false
+    } catch {
+      if !stoppedListening {
+        print("[SpeechAnalyzerEngine] Results stream error: \(error)")
+        delegate.onError(SpeechRecognitionEngineError.analysisInterrupted)
+      }
+    }
+
+    await finalizeResultsConsumption(
+      streamEndedNaturally: streamEndedNaturally,
+      delegate: delegate
+    )
+  }
+
+  private func finalizeResultsConsumption(
+    streamEndedNaturally: Bool,
+    delegate: SpeechRecognitionEngineDelegate
+  ) async {
     // Emit speechend and soundend if we had started (matching legacy behavior)
     if hasSpeechStarted {
       delegate.onSpeechEnd()
@@ -420,24 +562,40 @@ actor SpeechAnalyzerEngine: SpeechRecognitionEngine {
     if hasSoundStarted {
       delegate.onSoundEnd()
     }
+
+    if streamEndedNaturally {
+      Task { [weak self] in
+        guard let self = self else { return }
+        let currentState = await self.state
+        if currentState == "starting" || currentState == "recognizing" {
+          await self.performStop()
+        }
+      }
+    }
   }
 
   /// Emit a result using the unified result format
   private func emitResult(
-    text: String,
+    attributedText: AttributedString,
+    alternatives: [AttributedString],
     isFinal: Bool,
-    result: SpeechTranscriber.Result,
-    delegate: SpeechRecognitionEngineDelegate
+    delegate: SpeechRecognitionEngineDelegate,
+    stripPunctuation: Bool = false
   ) async {
     // Extract segments from AttributedString runs if available
     var segments: [UnifiedSegment] = []
 
     // Try to extract timing information from attributed string runs
-    for run in result.text.runs {
+    for run in attributedText.runs {
       if let timeRange = run.audioTimeRange {
         let startMillis = CMTimeGetSeconds(timeRange.start) * 1000
         let endMillis = CMTimeGetSeconds(timeRange.end) * 1000
-        let segmentText = String(result.text[run.range].characters)
+        var segmentText = String(attributedText[run.range].characters)
+
+        // Strip punctuation from segment if requested
+        if stripPunctuation {
+          segmentText = Self.removePunctuation(from: segmentText)
+        }
 
         segments.append(UnifiedSegment(
           startTimeMillis: startMillis,
@@ -448,17 +606,56 @@ actor SpeechAnalyzerEngine: SpeechRecognitionEngine {
       }
     }
 
+    // Process the transcript text
+    let rawText = String(attributedText.characters)
+    var processedText = rawText
+    if stripPunctuation {
+      processedText = Self.removePunctuation(from: rawText)
+    }
+
+    let unifiedAlternatives = alternatives
+      .map { alternative in
+        var alternativeText = String(alternative.characters)
+        if stripPunctuation {
+          alternativeText = Self.removePunctuation(from: alternativeText)
+        }
+        return UnifiedAlternative(
+          transcript: alternativeText,
+          confidence: 1.0
+        )
+      }
+      .filter { !$0.transcript.isEmpty }
+
     // Create a unified result
     let unifiedResult = UnifiedTranscriptionResult(
-      transcript: text,
+      transcript: processedText,
       confidence: 1.0,  // SpeechAnalyzer doesn't provide confidence scores
       segments: segments,
       isFinal: isFinal,
-      alternatives: []  // SpeechAnalyzer doesn't support alternatives
+      alternatives: unifiedAlternatives
     )
 
     // Emit via the unified result delegate method
     delegate.onUnifiedResult(unifiedResult)
+  }
+
+  /// Removes punctuation from text while preserving word spacing
+  /// This matches the behavior expected when addsPunctuation is false
+  private static func removePunctuation(from text: String) -> String {
+    // Define punctuation characters to remove
+    // This includes common sentence-ending and mid-sentence punctuation
+    let punctuationCharacters = CharacterSet(charactersIn: ".,!?;:\"'()[]{}—–-…")
+
+    // Remove punctuation while preserving spaces
+    return text.unicodeScalars
+      .filter { !punctuationCharacters.contains($0) }
+      .map { Character($0) }
+      .reduce(into: "") { result, char in
+        result.append(char)
+      }
+      .trimmingCharacters(in: .whitespaces)
+      // Clean up any double spaces that might result from removed punctuation
+      .replacingOccurrences(of: "  ", with: " ")
   }
 
   // MARK: - Audio Setup
@@ -788,7 +985,8 @@ actor SpeechAnalyzerEngine: SpeechRecognitionEngine {
 
     // Clear analyzer
     analyzer = nil
-    transcriber = nil
+    speechTranscriber = nil
+    dictationTranscriber = nil
     bufferConverter = nil
 
     // Remove observers
@@ -1125,35 +1323,45 @@ private class AudioBufferConverter {
   }
 }
 
-// MARK: - Asset Management (Static Methods)
+  // MARK: - Asset Management (Static Methods)
 
 @available(iOS 26, *)
 extension SpeechAnalyzerEngine {
 
   /// Check if assets are installed for a locale
-  static func isAssetInstalled(for locale: Locale) async -> Bool {
-    let installed = await SpeechTranscriber.installedLocales
+  static func isAssetInstalled(for locale: Locale, useDictation: Bool = false) async -> Bool {
+    let installed =
+      useDictation
+      ? await DictationTranscriber.installedLocales
+      : await SpeechTranscriber.installedLocales
     return installed.contains { installed in
       localesMatch(installed, locale)
     }
   }
 
   /// Check if a locale is supported
-  static func isLocaleSupported(_ locale: Locale) async -> Bool {
-    let supported = await SpeechTranscriber.supportedLocales
+  static func isLocaleSupported(_ locale: Locale, useDictation: Bool = false) async -> Bool {
+    let supported =
+      useDictation
+      ? await DictationTranscriber.supportedLocales
+      : await SpeechTranscriber.supportedLocales
     return supported.contains { supported in
       localesMatch(supported, locale)
     }
   }
 
   /// Get all supported locales
-  static func getSupportedLocales() async -> [Locale] {
-    return await SpeechTranscriber.supportedLocales
+  static func getSupportedLocales(useDictation: Bool = false) async -> [Locale] {
+    return useDictation
+      ? await DictationTranscriber.supportedLocales
+      : await SpeechTranscriber.supportedLocales
   }
 
   /// Get all installed locales
-  static func getInstalledLocales() async -> [Locale] {
-    return await SpeechTranscriber.installedLocales
+  static func getInstalledLocales(useDictation: Bool = false) async -> [Locale] {
+    return useDictation
+      ? await DictationTranscriber.installedLocales
+      : await SpeechTranscriber.installedLocales
   }
 
   /// Get all reserved locales
@@ -1162,19 +1370,16 @@ extension SpeechAnalyzerEngine {
   }
 
   /// Request asset installation for a locale
-  static func requestAssetInstallation(for locale: Locale) async throws -> Progress? {
-    let transcriber = SpeechTranscriber(
-      locale: locale,
-      transcriptionOptions: [],
-      reportingOptions: [],
-      attributeOptions: []
-    )
+  static func requestAssetInstallation(for locale: Locale, useDictation: Bool = false) async throws
+    -> Progress?
+  {
+    let module = createAssetModule(locale: locale, useDictation: useDictation)
 
-    if let downloader = try await AssetInventory.assetInstallationRequest(supporting: [transcriber])
+    if let downloader = try await AssetInventory.assetInstallationRequest(supporting: [module])
     {
       // Start download in background
       Task {
-        try await downloader.downloadAndInstall()
+        try? await downloader.downloadAndInstall()
       }
       return downloader.progress
     }
@@ -1195,5 +1400,24 @@ extension SpeechAnalyzerEngine {
   /// Release a reserved locale
   static func releaseLocale(_ locale: Locale) async {
     await AssetInventory.release(reservedLocale: locale)
+  }
+
+  private static func createAssetModule(locale: Locale, useDictation: Bool) -> any SpeechModule {
+    if useDictation {
+      return DictationTranscriber(
+        locale: locale,
+        contentHints: [],
+        transcriptionOptions: [],
+        reportingOptions: [],
+        attributeOptions: []
+      )
+    }
+
+    return SpeechTranscriber(
+      locale: locale,
+      transcriptionOptions: [],
+      reportingOptions: [],
+      attributeOptions: []
+    )
   }
 }
