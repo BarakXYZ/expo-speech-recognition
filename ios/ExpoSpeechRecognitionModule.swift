@@ -666,6 +666,15 @@ public class ExpoSpeechRecognitionModule: Module, SpeechRecognitionEngineDelegat
         locale: locale,
         options: options
       )
+
+      // With assetPolicy=require and missing assets, we intentionally fail fast instead of
+      // falling back to SFSpeechRecognizer. In that flow, speech recognizer permission is not needed.
+      if preferredEngine.reason == .assetNotInstalled,
+        options.iosSpeechAnalyzerAssetPolicy == .require
+      {
+        return false
+      }
+
       return preferredEngine.engine == .sfSpeechRecognizer
     }
 
