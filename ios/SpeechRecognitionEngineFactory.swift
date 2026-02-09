@@ -181,6 +181,9 @@ class SpeechRecognitionEngineFactory {
     if isInstalled {
       return EngineSelectionInfo(engine: .speechAnalyzer, reason: .assetInstalled)
     } else {
+      if options?.iosSpeechAnalyzerAssetPolicy == .require {
+        return EngineSelectionInfo(engine: .speechAnalyzer, reason: .assetNotInstalled)
+      }
       return EngineSelectionInfo(engine: .sfSpeechRecognizer, reason: .assetNotInstalled)
     }
   }
