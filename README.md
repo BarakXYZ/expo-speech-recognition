@@ -801,8 +801,6 @@ iOS 26 introduces [`SpeechAnalyzer`](https://developer.apple.com/documentation/s
 - Native Swift async/await support
 
 **Trade-offs:**
-- `contextualStrings` is not supported (falls back to legacy engine)
-- `maxAlternatives` is not supported (single best result only)
 - Requires on-device asset downloads per locale
 - SpeechAnalyzer models emit punctuated text; `addsPunctuation: false` applies post-processing to strip punctuation
 
@@ -814,7 +812,6 @@ The library automatically selects the best engine based on your options and devi
 iOS < 26 → SFSpeechRecognizer (legacy)
 iOS >= 26:
   ├─ iosForceLegacyEngine: true → SFSpeechRecognizer
-  ├─ contextualStrings provided → SFSpeechRecognizer (automatic fallback)
   ├─ Asset not installed:
   │   ├─ iosSpeechAnalyzerAssetPolicy: "auto" → SFSpeechRecognizer (silent fallback)
   │   ├─ iosSpeechAnalyzerAssetPolicy: "require" → Error: "asset-not-installed"
@@ -831,8 +828,7 @@ useSpeechRecognitionEvent("engineselected", (event) => {
   console.log("Engine:", event.engine); // "SpeechAnalyzer" | "SFSpeechRecognizer"
   console.log("Reason:", event.reason);
   // Reasons: "ios_version" | "asset_installed" | "asset_not_installed" |
-  //          "locale_not_supported" |
-  //          "force_legacy" | "contextual_strings" | "android"
+  //          "locale_not_supported" | "force_legacy" | "android"
 });
 ```
 
@@ -846,7 +842,7 @@ ExpoSpeechRecognitionModule.start({
   // ... other options ...
 
   // [iOS 26+] Force use of legacy SFSpeechRecognizer.
-  // Useful when you need contextualStrings or prefer the legacy behavior.
+  // Useful when you explicitly want legacy behavior.
   // Default: false
   iosForceLegacyEngine: false,
 
@@ -933,8 +929,8 @@ There are some important behavioral differences between `SpeechAnalyzer` and the
 | Feature              | SFSpeechRecognizer (Legacy)           | SpeechAnalyzer (iOS 26+)                                    |
 | -------------------- | ------------------------------------- | ----------------------------------------------------------- |
 | **Punctuation**      | Controlled by `addsPunctuation`       | Model is punctuated; `addsPunctuation: false` strips punctuation |
-| **contextualStrings**| Supported                             | Not supported (falls back to legacy)                        |
-| **maxAlternatives**  | Supported (1-5 alternatives)          | Not supported (single result only)                          |
+| **contextualStrings**| Supported                             | Supported via `AnalysisContext.contextualStrings[.general]` |
+| **maxAlternatives**  | Supported (1-5 alternatives)          | Supported via alternative transcriptions (when available)   |
 | **On-device**        | Optional (`requiresOnDeviceRecognition`) | Always on-device                                         |
 | **Asset download**   | Not required                          | Required per locale                                         |
 | **Network usage**    | Optional (server-based available)     | Never uses network for recognition                          |
@@ -956,21 +952,19 @@ ExpoSpeechRecognitionModule.start({
 });
 ```
 
-#### contextualStrings Fallback
+#### contextualStrings with SpeechAnalyzer
 
-When you provide `contextualStrings`, the library automatically falls back to `SFSpeechRecognizer` since `SpeechAnalyzer` doesn't support custom vocabulary:
+On iOS 26+, the library forwards `contextualStrings` into `AnalysisContext.contextualStrings[.general]` when using SpeechAnalyzer:
 
 ```ts
 ExpoSpeechRecognitionModule.start({
   lang: "en-US",
-  // This will automatically use SFSpeechRecognizer on iOS 26+
   contextualStrings: ["Carlsen", "Nepomniachtchi", "Praggnanandhaa"],
 });
 
 // Listen to confirm which engine was used
 useSpeechRecognitionEvent("engineselected", (event) => {
-  // event.engine === "SFSpeechRecognizer"
-  // event.reason === "contextual_strings"
+  // event.engine === "SpeechAnalyzer" (when assets are installed)
 });
 ```
 
@@ -990,7 +984,7 @@ As of 12 July 2025, the following platforms are supported:
 | **Audio File Transcription**        | ❌          | ✅         | ✅          | ✅        | ✅      | Transcribe from a local file URI                                                |
 | **Volume Metering**                 | ✅          | ✅         | ✅          | ✅        | ✅      | Real-time volume levels                                                         |
 | **Voice Processing**                | ❌          | ❌         | ❌          | ✅        | ✅      | iOS: Prevent microphone feedback                                                |
-| **Contextual Strings**              | ✅          | ✅         | ✅          | ✅        | ⚠️ \*\* | \*\*iOS 26+: Falls back to legacy SFSpeechRecognizer                            |
+| **Contextual Strings**              | ✅          | ✅         | ✅          | ✅        | ✅ \*\* | \*\*iOS 26+: Supported via SpeechAnalyzer `AnalysisContext.contextualStrings`    |
 | **Punctuation (`addsPunctuation`)** | ❌          | ✅ \*      | ✅ \*       | ✅        | ✅ \*\* | \*Android: On-device only. \*\*iOS 26+ SpeechAnalyzer applies punctuation-aware output handling |
 | **Language Detection**              | ❌          | ❌         | ✅ \*       | ❌        | ❌      | \*Android: only with on-device recognition                                      |
 | **Word Confidence & Timing**        | ❌          | ❌         | ✅ \*       | ✅        | ✅      | \*Android: only with on-device recognition                                      |

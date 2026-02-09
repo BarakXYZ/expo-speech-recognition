@@ -185,7 +185,7 @@ public class ExpoSpeechRecognitionModule: Module, SpeechRecognitionEngineDelegat
 
           // Reset the previous result
           self.previousResult = nil
-          self.currentMaxAlternatives = options.maxAlternatives
+          self.currentMaxAlternatives = max(1, options.maxAlternatives)
 
           // Resolve the locale first
           guard let locale = await resolveLocale(localeIdentifier: options.lang, options: options)
@@ -785,8 +785,9 @@ public class ExpoSpeechRecognitionModule: Module, SpeechRecognitionEngineDelegat
   /// Uses the unified result format since SFSpeechRecognitionResult can't be created directly
   func handleUnifiedResult(_ result: UnifiedTranscriptionResult) {
     var results: [TranscriptionResult] = []
+    let maxAlternatives = max(1, currentMaxAlternatives)
+    var seenTranscripts = Set<String>()
 
-    // SpeechAnalyzer only provides a single result (no alternatives)
     if !result.transcript.isEmpty {
       // Convert unified segments to local Segment type
       let segments = result.segments.map { segment in
@@ -811,6 +812,26 @@ public class ExpoSpeechRecognitionModule: Module, SpeechRecognitionEngineDelegat
         segments: segments
       )
       results.append(item)
+      seenTranscripts.insert(result.transcript)
+    }
+
+    if maxAlternatives > results.count {
+      let remainingSlots = maxAlternatives - results.count
+      let additionalAlternatives = result.alternatives
+        .filter { !$0.transcript.isEmpty && !seenTranscripts.contains($0.transcript) }
+        .prefix(remainingSlots)
+
+      for alternative in additionalAlternatives {
+        let transcript = hasSeenFinalResult ? " " + alternative.transcript : alternative.transcript
+        results.append(
+          TranscriptionResult(
+            transcript: transcript,
+            confidence: alternative.confidence,
+            segments: []
+          )
+        )
+        seenTranscripts.insert(alternative.transcript)
+      }
     }
 
     // Track final results for continuous mode

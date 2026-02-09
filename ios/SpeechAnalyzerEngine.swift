@@ -130,7 +130,7 @@ actor SpeechAnalyzerEngine: SpeechRecognitionEngine {
     case .networkRecognition:
       return false  // SpeechAnalyzer is on-device only
     case .maxAlternatives:
-      return false  // SpeechAnalyzer returns single best result
+      return true  // Via ReportingOption.alternativeTranscriptions
     }
   }
 
@@ -416,8 +416,11 @@ actor SpeechAnalyzerEngine: SpeechRecognitionEngine {
         transcriptionOptions.insert(.punctuation)
       }
 
-      let reportingOptions: Set<DictationTranscriber.ReportingOption> =
+      var reportingOptions: Set<DictationTranscriber.ReportingOption> =
         options.interimResults ? [.volatileResults] : []
+      if options.maxAlternatives > 1 {
+        reportingOptions.insert(.alternativeTranscriptions)
+      }
 
       let transcriber = DictationTranscriber(
         locale: locale,
@@ -430,8 +433,11 @@ actor SpeechAnalyzerEngine: SpeechRecognitionEngine {
     } else {
       print("[SpeechAnalyzerEngine] Using SpeechTranscriber for locale: \(locale.identifier)")
 
-      let reportingOptions: Set<SpeechTranscriber.ReportingOption> =
+      var reportingOptions: Set<SpeechTranscriber.ReportingOption> =
         options.interimResults ? [.volatileResults] : []
+      if options.maxAlternatives > 1 {
+        reportingOptions.insert(.alternativeTranscriptions)
+      }
 
       let transcriber = SpeechTranscriber(
         locale: locale,
@@ -495,7 +501,8 @@ actor SpeechAnalyzerEngine: SpeechRecognitionEngine {
           alternatives: result.alternatives,
           isFinal: isFinal,
           delegate: delegate,
-          stripPunctuation: !options.addsPunctuation
+          stripPunctuation: !options.addsPunctuation,
+          maxAlternatives: options.maxAlternatives
         )
 
         // If final and not continuous, we're done
@@ -569,7 +576,8 @@ actor SpeechAnalyzerEngine: SpeechRecognitionEngine {
           alternatives: result.alternatives,
           isFinal: isFinal,
           delegate: delegate,
-          stripPunctuation: !options.addsPunctuation
+          stripPunctuation: !options.addsPunctuation,
+          maxAlternatives: options.maxAlternatives
         )
 
         // If final and not continuous, we're done
@@ -625,7 +633,8 @@ actor SpeechAnalyzerEngine: SpeechRecognitionEngine {
     alternatives: [AttributedString],
     isFinal: Bool,
     delegate: SpeechRecognitionEngineDelegate,
-    stripPunctuation: Bool = false
+    stripPunctuation: Bool = false,
+    maxAlternatives: Int
   ) async {
     // Extract segments from AttributedString runs if available
     var segments: [UnifiedSegment] = []
@@ -658,7 +667,9 @@ actor SpeechAnalyzerEngine: SpeechRecognitionEngine {
       processedText = Self.removePunctuation(from: rawText)
     }
 
+    let alternativeLimit = max(0, maxAlternatives - 1)
     let unifiedAlternatives = alternatives
+      .prefix(alternativeLimit)
       .map { alternative in
         var alternativeText = String(alternative.characters)
         if stripPunctuation {
