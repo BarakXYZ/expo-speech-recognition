@@ -282,7 +282,7 @@ public class ExpoSpeechRecognitionModule: Module, SpeechRecognitionEngineDelegat
       var allCategoryOptions: [(option: AVAudioSession.CategoryOptions, string: String)] = [
         (.mixWithOthers, "mixWithOthers"),
         (.duckOthers, "duckOthers"),
-        (.allowBluetooth, "allowBluetooth"),
+        (.allowBluetoothHFP, "allowBluetooth"),
         (.defaultToSpeaker, "defaultToSpeaker"),
         (.interruptSpokenAudioAndMixWithOthers, "interruptSpokenAudioAndMixWithOthers"),
         (.allowBluetoothA2DP, "allowBluetoothA2DP"),

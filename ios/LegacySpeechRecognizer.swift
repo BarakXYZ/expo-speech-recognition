@@ -604,7 +604,7 @@ actor LegacySpeechRecognizer: SpeechRecognitionEngine {
       try audioSession.setCategory(
         .playAndRecord,
         mode: .measurement,
-        options: [.defaultToSpeaker, .allowBluetooth]
+        options: [.defaultToSpeaker, .allowBluetoothHFP]
       )
     }
 

@@ -184,7 +184,7 @@ enum CategoryOptionsParam: String, Enumerable {
     case .mixWithOthers: return .mixWithOthers
     case .duckOthers: return .duckOthers
     case .interruptSpokenAudioAndMixWithOthers: return .interruptSpokenAudioAndMixWithOthers
-    case .allowBluetooth: return .allowBluetooth
+    case .allowBluetooth: return .allowBluetoothHFP
     case .allowBluetoothA2DP: return .allowBluetoothA2DP
     case .allowAirPlay: return .allowAirPlay
     case .defaultToSpeaker: return .defaultToSpeaker
