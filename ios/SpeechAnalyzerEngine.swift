@@ -118,7 +118,7 @@ actor SpeechAnalyzerEngine: SpeechRecognitionEngine {
   func supports(feature: SpeechRecognitionFeature) -> Bool {
     switch feature {
     case .contextualStrings:
-      return false  // SpeechAnalyzer does NOT support contextualStrings
+      return true  // Via AnalysisContext.contextualStrings
     case .onDeviceRecognition:
       return true  // SpeechAnalyzer is always on-device
     case .automaticLanguageDetection:
@@ -203,11 +203,11 @@ actor SpeechAnalyzerEngine: SpeechRecognitionEngine {
       }
 
       // Create analyzer with the selected transcriber module
-      analyzer = SpeechAnalyzer(modules: analyzerModules)
+      let speechAnalyzer = SpeechAnalyzer(modules: analyzerModules)
+      analyzer = speechAnalyzer
 
-      guard analyzer != nil else {
-        throw AnalyzerError.failedToCreateAnalyzer
-      }
+      let analysisContext = Self.buildAnalysisContext(from: options)
+      try await speechAnalyzer.setContext(analysisContext)
 
       // Get best audio format for the selected transcriber
       analyzerFormat = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: analyzerModules)
@@ -369,6 +369,26 @@ actor SpeechAnalyzerEngine: SpeechRecognitionEngine {
   }
 
   // MARK: - Transcriber Creation
+
+  private static func buildAnalysisContext(from options: SpeechRecognitionOptions) -> AnalysisContext
+  {
+    let context = AnalysisContext()
+    guard let contextualStrings = options.contextualStrings else {
+      return context
+    }
+
+    var seen = Set<String>()
+    let normalizedStrings = contextualStrings
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty }
+      .filter { seen.insert($0).inserted }
+
+    if !normalizedStrings.isEmpty {
+      context.contextualStrings[.general] = normalizedStrings
+    }
+
+    return context
+  }
 
   private func createTranscriber(options: SpeechRecognitionOptions) async throws
     -> ActiveTranscriber

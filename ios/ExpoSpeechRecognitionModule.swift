@@ -225,7 +225,7 @@ public class ExpoSpeechRecognitionModule: Module, SpeechRecognitionEngineDelegat
           // iOS < 26: Only recreate when locale changes - engine is always SFSpeechRecognizer
           let shouldRecreateEngine: Bool
           if #available(iOS 26, *) {
-            // Options like contextualStrings, iosForceLegacyEngine, and asset status
+            // Options like iosForceLegacyEngine and asset status
             // affect engine selection on iOS 26+ - must evaluate fresh each time
             shouldRecreateEngine = true
           } else {
@@ -650,9 +650,6 @@ public class ExpoSpeechRecognitionModule: Module, SpeechRecognitionEngineDelegat
 
   private func shouldEvaluateSpeechAnalyzerSupport(options: SpeechRecognitionOptions) -> Bool {
     if options.iosForceLegacyEngine {
-      return false
-    }
-    if let contextualStrings = options.contextualStrings, !contextualStrings.isEmpty {
       return false
     }
     return true

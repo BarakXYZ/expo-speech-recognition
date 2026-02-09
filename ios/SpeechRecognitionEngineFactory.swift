@@ -27,15 +27,6 @@ class SpeechRecognitionEngineFactory {
         return try await LegacySpeechRecognizer(locale: locale)
       }
 
-      // Check if contextualStrings is provided (requires legacy engine)
-      if let contextualStrings = options.contextualStrings, !contextualStrings.isEmpty {
-        print(
-          "[EngineFactory] Using legacy engine: contextualStrings not supported by SpeechAnalyzer")
-        delegate?.onEngineSelected(
-          EngineSelectionInfo(engine: .sfSpeechRecognizer, reason: .contextualStrings))
-        return try await LegacySpeechRecognizer(locale: locale)
-      }
-
       let useDictation =
         options.iosTranscriberType == .dictation
         || options.addsPunctuation
@@ -148,11 +139,6 @@ class SpeechRecognitionEngineFactory {
         return EngineSelectionInfo(engine: .sfSpeechRecognizer, reason: .forceLegacy)
       }
 
-      // Check contextualStrings
-      if let contextualStrings = options?.contextualStrings, !contextualStrings.isEmpty {
-        return EngineSelectionInfo(engine: .sfSpeechRecognizer, reason: .contextualStrings)
-      }
-
       // For synchronous check, assume SpeechAnalyzer would be used if assets are installed
       // Actual asset check requires async
       return EngineSelectionInfo(engine: .speechAnalyzer, reason: .assetInstalled)
@@ -172,11 +158,6 @@ class SpeechRecognitionEngineFactory {
     // Check iosForceLegacyEngine
     if options?.iosForceLegacyEngine == true {
       return EngineSelectionInfo(engine: .sfSpeechRecognizer, reason: .forceLegacy)
-    }
-
-    // Check contextualStrings
-    if let contextualStrings = options?.contextualStrings, !contextualStrings.isEmpty {
-      return EngineSelectionInfo(engine: .sfSpeechRecognizer, reason: .contextualStrings)
     }
 
     let useDictation =

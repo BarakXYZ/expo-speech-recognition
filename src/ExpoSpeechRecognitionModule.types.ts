@@ -225,7 +225,9 @@ export type ExpoSpeechRecognitionOptions = {
    *
    * On Android, this configures [`EXTRA_BIASING_STRINGS`](https://developer.android.com/reference/android/speech/RecognizerIntent#EXTRA_BIASING_STRINGS) in the recognizer intent (API level 33+).
    *
-   * On iOS, this configures [`SFSpeechRecognitionRequest.contextualStrings`](https://developer.apple.com/documentation/speech/sfspeechrecognitionrequest/1649391-contextualstrings).
+   * On iOS 13.4-25.x, this configures [`SFSpeechRecognitionRequest.contextualStrings`](https://developer.apple.com/documentation/speech/sfspeechrecognitionrequest/1649391-contextualstrings).
+   *
+   * On iOS 26+ with SpeechAnalyzer, this configures [`AnalysisContext.contextualStrings[.general]`](https://developer.apple.com/documentation/speech/analysiscontext/contextualstrings).
    */
   contextualStrings?: string[];
   /**
@@ -373,9 +375,7 @@ export type ExpoSpeechRecognitionOptions = {
   /**
    * [iOS 26+] Force use of legacy SFSpeechRecognizer even on iOS 26+.
    *
-   * Useful when you need features not supported by SpeechAnalyzer:
-   * - `contextualStrings` (custom vocabulary biasing)
-   * - `maxAlternatives` (multiple transcription alternatives)
+   * Useful when you explicitly want SFSpeechRecognizer behavior.
    *
    * Default: false
    */

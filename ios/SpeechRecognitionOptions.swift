@@ -52,7 +52,7 @@ struct SpeechRecognitionOptions: Record {
   var iosTranscriberType: IOSTranscriberType? = nil
 
   /// [iOS 26+] Force use of legacy SFSpeechRecognizer.
-  /// Useful when you need contextualStrings.
+  /// Useful when you explicitly need legacy-only behavior.
   /// Default: false
   @Field
   var iosForceLegacyEngine: Bool = false
