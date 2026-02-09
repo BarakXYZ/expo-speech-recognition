@@ -73,8 +73,8 @@ actor SpeechAnalyzerEngine: SpeechRecognitionEngine {
   /// Whether the recognizer has been stopped by the user
   private var stoppedListening = false
 
-  /// Whether the locale has been reserved (must release on cleanup)
-  private var localeReserved = false
+  /// Whether this engine instance owns the current locale reservation.
+  private var localeReservedByCurrentEngine = false
 
   /// For volume change events
   @MainActor var volumeChangeHandler: ((Float) -> Void)?
@@ -90,15 +90,16 @@ actor SpeechAnalyzerEngine: SpeechRecognitionEngine {
   init(locale: Locale) async throws {
     self.locale = locale
 
-    // Verify locale is supported
-    let supportedLocales = await SpeechTranscriber.supportedLocales
-    let isSupported = supportedLocales.contains { supported in
-      Self.localesMatch(supported, locale)
-    }
+    // Validate against both transcriber families.
+    // Factory chooses speech/dictation from runtime options, so init must not assume speech-only support.
+    let isSpeechSupported = await Self.isLocaleSupported(locale, useDictation: false)
+    let isDictationSupported = await Self.isLocaleSupported(locale, useDictation: true)
 
-    guard isSupported else {
+    guard isSpeechSupported || isDictationSupported else {
+      let speechLocales = await SpeechTranscriber.supportedLocales.map(\.identifier)
+      let dictationLocales = await DictationTranscriber.supportedLocales.map(\.identifier)
       print(
-        "[SpeechAnalyzerEngine] Locale \(locale.identifier) not supported. Supported: \(supportedLocales.map { $0.identifier })"
+        "[SpeechAnalyzerEngine] Locale \(locale.identifier) not supported. Speech locales: \(speechLocales), Dictation locales: \(dictationLocales)"
       )
       throw AnalyzerError.localeNotSupported
     }
@@ -318,15 +319,37 @@ actor SpeechAnalyzerEngine: SpeechRecognitionEngine {
 
     if isAlreadyReserved {
       print("[SpeechAnalyzerEngine] Locale \(locale.identifier) already reserved")
-      localeReserved = true
+      localeReservedByCurrentEngine = false
       return
+    }
+
+    let maximumReservedLocales = AssetInventory.maximumReservedLocales
+    if reservedLocales.count >= maximumReservedLocales {
+      print(
+        "[SpeechAnalyzerEngine] Cannot reserve locale \(locale.identifier): reached reservation limit (\(reservedLocales.count)/\(maximumReservedLocales))"
+      )
+      throw AnalyzerError.localeReservationFailed
     }
 
     // Reserve the locale
     do {
-      try await AssetInventory.reserve(locale: locale)
-      localeReserved = true
-      print("[SpeechAnalyzerEngine] Reserved locale: \(locale.identifier)")
+      let didReserve = try await AssetInventory.reserve(locale: locale)
+      if didReserve {
+        localeReservedByCurrentEngine = true
+        print("[SpeechAnalyzerEngine] Reserved locale: \(locale.identifier)")
+        return
+      }
+
+      // Another recognizer may reserve this locale between our status check and reserve call.
+      let refreshedReservedLocales = await AssetInventory.reservedLocales
+      let isReservedAfterRace = refreshedReservedLocales.contains { reserved in
+        Self.localesMatch(reserved, locale)
+      }
+      guard isReservedAfterRace else {
+        throw AnalyzerError.localeReservationFailed
+      }
+      localeReservedByCurrentEngine = false
+      print("[SpeechAnalyzerEngine] Locale \(locale.identifier) reserved by another session")
     } catch {
       print("[SpeechAnalyzerEngine] Failed to reserve locale \(locale.identifier): \(error)")
       throw AnalyzerError.localeReservationFailed
@@ -335,12 +358,15 @@ actor SpeechAnalyzerEngine: SpeechRecognitionEngine {
 
   /// Release the reserved locale on cleanup
   private func releaseLocaleIfNeeded() async {
-    guard localeReserved else { return }
+    guard localeReservedByCurrentEngine else { return }
 
-    // Note: We don't release immediately as other sessions might need it
-    // The system manages locale slots; releasing too aggressively can cause issues
-    // For now, we keep the locale reserved for future use
-    print("[SpeechAnalyzerEngine] Keeping locale \(locale.identifier) reserved for future use")
+    let released = await AssetInventory.release(reservedLocale: locale)
+    localeReservedByCurrentEngine = false
+    if released {
+      print("[SpeechAnalyzerEngine] Released locale reservation: \(locale.identifier)")
+    } else {
+      print("[SpeechAnalyzerEngine] Locale reservation already released: \(locale.identifier)")
+    }
   }
 
   // MARK: - Transcriber Creation
@@ -1005,8 +1031,8 @@ actor SpeechAnalyzerEngine: SpeechRecognitionEngine {
     }
     audioFileRef = nil
 
-    // Release locale reservation (optional - we keep it for future use)
-    // await releaseLocaleIfNeeded()
+    // Release locale reservation owned by this engine instance.
+    await releaseLocaleIfNeeded()
 
     // Emit end events
     if andEmitEnd && wasRunning {

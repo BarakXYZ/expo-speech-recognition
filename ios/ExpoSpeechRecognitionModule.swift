@@ -188,14 +188,14 @@ public class ExpoSpeechRecognitionModule: Module, SpeechRecognitionEngineDelegat
           self.currentMaxAlternatives = options.maxAlternatives
 
           // Resolve the locale first
-          guard let locale = resolveLocale(localeIdentifier: options.lang) else {
-            let availableLocales = SFSpeechRecognizer.supportedLocales().map { $0.identifier }
-              .joined(separator: ", ")
+          guard let locale = await resolveLocale(localeIdentifier: options.lang, options: options)
+          else {
+            let availableLocales = await getAvailableLocalesForErrorMessage(options: options)
 
             sendErrorAndStop(
               error: "language-not-supported",
               message:
-                "Locale \(options.lang) is not supported by the speech recognizer. Available locales: \(availableLocales)"
+                "Locale \(options.lang) is not supported by the selected speech engines. Available locales: \(availableLocales)"
             )
             return
           }
@@ -611,20 +611,70 @@ public class ExpoSpeechRecognitionModule: Module, SpeechRecognitionEngineDelegat
   // MARK: - Helpers
 
   /** Normalizes the locale for compatibility between Android and iOS */
-  func resolveLocale(localeIdentifier: String) -> Locale? {
-    // The supportedLocales() method returns the locales in the format with dashes, e.g. "en-US"
-    // However, we shouldn't mind if the user passes in the locale with underscores, e.g. "en_US"
-    let normalizedIdentifier = localeIdentifier.replacingOccurrences(of: "_", with: "-")
-    let localesToCheck = [localeIdentifier, normalizedIdentifier]
-    let supportedLocales = SFSpeechRecognizer.supportedLocales()
+  func resolveLocale(localeIdentifier: String, options: SpeechRecognitionOptions) async -> Locale? {
+    // The supportedLocales() method returns locales in BCP-47 format (e.g. "en-US"),
+    // but callers may pass underscores (e.g. "en_US"), so normalize before checks.
+    let normalizedIdentifier = normalizeLocaleIdentifier(localeIdentifier)
+    let locale = Locale(identifier: normalizedIdentifier)
 
-    for identifier in localesToCheck {
-      if supportedLocales.contains(where: { $0.identifier == identifier }) {
-        return Locale(identifier: identifier)
+    let supportedLegacyLocales = SFSpeechRecognizer.supportedLocales()
+    let isLegacySupported = supportedLegacyLocales.contains { supported in
+      normalizeLocaleIdentifier(supported.identifier) == normalizedIdentifier
+    }
+    if isLegacySupported {
+      return locale
+    }
+
+    guard shouldEvaluateSpeechAnalyzerSupport(options: options) else {
+      return nil
+    }
+
+    if #available(iOS 26, *) {
+      let useDictation =
+        options.iosTranscriberType == .dictation
+        || options.addsPunctuation
+      let isAnalyzerSupported = await SpeechAnalyzerEngine.isLocaleSupported(
+        locale,
+        useDictation: useDictation
+      )
+      if isAnalyzerSupported {
+        return locale
       }
     }
 
     return nil
+  }
+
+  private func shouldEvaluateSpeechAnalyzerSupport(options: SpeechRecognitionOptions) -> Bool {
+    if options.iosForceLegacyEngine {
+      return false
+    }
+    if let contextualStrings = options.contextualStrings, !contextualStrings.isEmpty {
+      return false
+    }
+    return true
+  }
+
+  private func normalizeLocaleIdentifier(_ localeIdentifier: String) -> String {
+    localeIdentifier.replacingOccurrences(of: "_", with: "-")
+  }
+
+  private func getAvailableLocalesForErrorMessage(options: SpeechRecognitionOptions) async -> String {
+    var availableLocales = Set(
+      SFSpeechRecognizer.supportedLocales().map { normalizeLocaleIdentifier($0.identifier) }
+    )
+
+    if shouldEvaluateSpeechAnalyzerSupport(options: options), #available(iOS 26, *) {
+      let useDictation =
+        options.iosTranscriberType == .dictation
+        || options.addsPunctuation
+      let analyzerLocales = await SpeechAnalyzerEngine.getSupportedLocales(useDictation: useDictation)
+      for locale in analyzerLocales {
+        availableLocales.insert(normalizeLocaleIdentifier(locale.identifier))
+      }
+    }
+
+    return availableLocales.sorted().joined(separator: ", ")
   }
 
   func sendErrorAndStop(error: String, message: String) {
