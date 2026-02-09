@@ -431,12 +431,12 @@ public class ExpoSpeechRecognitionModule: Module, SpeechRecognitionEngineDelegat
         Task {
           let locale = Locale(identifier: normalizedLocale)
           do {
-            try await SpeechAnalyzerAssetManager.shared.downloadAsset(
+            let result = try await SpeechAnalyzerAssetManager.shared.downloadAsset(
               for: locale,
               useDictation: useDictation
             )
             promise.resolve([
-              "status": "download_started",
+              "status": result.rawValue,
               "locale": normalizedLocale,
             ])
           } catch let error as SpeechRecognitionEngineError {

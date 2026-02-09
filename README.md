@@ -901,9 +901,10 @@ const dictationStatus = await ExpoSpeechRecognitionModule.getSpeechAnalyzerAsset
   { iosTranscriberType: "dictation" },
 );
 
-// Trigger asset download for a locale
+// Ensure assets are installed for a locale
 const result = await ExpoSpeechRecognitionModule.downloadSpeechAnalyzerAsset("en-US");
-console.log(result); // { status: "download_started", locale: "en-US" }
+console.log(result);
+// { status: "installed" | "already_installed" | "already_downloading", locale: "en-US" }
 
 // Optional: trigger dictation-mode asset download
 await ExpoSpeechRecognitionModule.downloadSpeechAnalyzerAsset("en-US", {

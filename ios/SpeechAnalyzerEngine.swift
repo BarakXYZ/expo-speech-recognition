@@ -1433,7 +1433,7 @@ extension SpeechAnalyzerEngine {
       return DictationTranscriber(
         locale: locale,
         contentHints: [],
-        transcriptionOptions: [],
+        transcriptionOptions: [.punctuation],
         reportingOptions: [],
         attributeOptions: []
       )

@@ -5,9 +5,16 @@ import Speech
 /// Provides status checks, download initiation, and locale listing for JS APIs.
 @available(iOS 26, *)
 actor SpeechAnalyzerAssetManager {
+  enum DownloadResult: String {
+    case installed = "installed"
+    case alreadyInstalled = "already_installed"
+    case alreadyDownloading = "already_downloading"
+  }
+
   static let shared = SpeechAnalyzerAssetManager()
 
   private var activeDownloadProgress: [String: Progress] = [:]
+  private var activeDownloadTasks: [String: Task<Void, Error>] = [:]
 
   func getAssetStatus(for locale: Locale, useDictation: Bool = false) async -> SpeechAnalyzerAssetInfo {
     let inventoryStatus = await Self.getInventoryStatus(for: locale, useDictation: useDictation)
@@ -38,36 +45,75 @@ actor SpeechAnalyzerAssetManager {
     )
   }
 
-  func downloadAsset(for locale: Locale, useDictation: Bool = false) async throws {
+  func downloadAsset(for locale: Locale, useDictation: Bool = false) async throws -> DownloadResult {
     let statusInfo = await getAssetStatus(for: locale, useDictation: useDictation)
+    let progressKey = Self.progressKey(for: locale.identifier, useDictation: useDictation)
 
     switch statusInfo.status {
     case .installed:
-      return
+      return .alreadyInstalled
     case .notAvailable:
       throw SpeechRecognitionEngineError.localeNotSupported(locale: locale.identifier)
     case .installing:
-      return
+      if let activeDownloadTask = activeDownloadTasks[progressKey] {
+        do {
+          try await activeDownloadTask.value
+        } catch {
+          activeDownloadTasks[progressKey] = nil
+          activeDownloadProgress[progressKey] = nil
+          throw SpeechRecognitionEngineError.assetDownloadFailed(locale: locale.identifier)
+        }
+
+        let refreshedStatus = await Self.getInventoryStatus(for: locale, useDictation: useDictation)
+        guard Self.mapInventoryStatus(refreshedStatus) == .installed else {
+          throw SpeechRecognitionEngineError.assetDownloadFailed(locale: locale.identifier)
+        }
+        return .installed
+      }
+
+      // Installation was likely triggered outside this module. Surface state without claiming success.
+      return .alreadyDownloading
     case .notInstalled, .unknown:
       let module = Self.createAssetModule(locale: locale, useDictation: useDictation)
 
       guard
         let request = try await AssetInventory.assetInstallationRequest(supporting: [module])
       else {
-        return
+        let refreshedStatus = await Self.getInventoryStatus(for: locale, useDictation: useDictation)
+        switch Self.mapInventoryStatus(refreshedStatus) {
+        case .installed:
+          return .alreadyInstalled
+        case .installing:
+          return .alreadyDownloading
+        default:
+          throw SpeechRecognitionEngineError.assetDownloadFailed(locale: locale.identifier)
+        }
       }
 
-      let progressKey = Self.progressKey(for: locale.identifier, useDictation: useDictation)
       activeDownloadProgress[progressKey] = request.progress
 
-      Task.detached(priority: .utility) {
-        do {
-          try await request.downloadAndInstall()
-        } catch {
-          // Keep cleanup best-effort and let callers inspect status/errors independently.
-        }
-        await SpeechAnalyzerAssetManager.shared.clearProgress(for: progressKey)
+      let installTask = Task(priority: .utility) {
+        try await request.downloadAndInstall()
       }
+      activeDownloadTasks[progressKey] = installTask
+
+      do {
+        try await installTask.value
+      } catch {
+        activeDownloadTasks[progressKey] = nil
+        activeDownloadProgress[progressKey] = nil
+        throw SpeechRecognitionEngineError.assetDownloadFailed(locale: locale.identifier)
+      }
+
+      activeDownloadTasks[progressKey] = nil
+      activeDownloadProgress[progressKey] = nil
+
+      let refreshedStatus = await Self.getInventoryStatus(for: locale, useDictation: useDictation)
+      guard Self.mapInventoryStatus(refreshedStatus) == .installed else {
+        throw SpeechRecognitionEngineError.assetDownloadFailed(locale: locale.identifier)
+      }
+
+      return .installed
     }
   }
 
@@ -88,10 +134,6 @@ actor SpeechAnalyzerAssetManager {
     }
 
     return results
-  }
-
-  private func clearProgress(for localeIdentifier: String) {
-    activeDownloadProgress[localeIdentifier] = nil
   }
 
   private static func getInventoryStatus(for locale: Locale, useDictation: Bool) async -> AssetInventory.Status {

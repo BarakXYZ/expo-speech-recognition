@@ -903,14 +903,14 @@ export declare class ExpoSpeechRecognitionModuleType extends NativeModule<ExpoSp
   ): Promise<SpeechAnalyzerAssetStatus>;
 
   /**
-   * [iOS 26+ only] Trigger download of SpeechAnalyzer assets for a locale.
+   * [iOS 26+ only] Ensure SpeechAnalyzer assets are installed for a locale.
    *
    * @param locale - The locale to download, e.g. "en-US"
    * @param options - Optional transcriber query options. Defaults to SpeechTranscriber assets.
    * @throws On iOS < 26 or if download fails
    */
   downloadSpeechAnalyzerAsset(locale: string, options?: SpeechAnalyzerAssetQueryOptions): Promise<{
-    status: "download_started";
+    status: "installed" | "already_installed" | "already_downloading";
     locale: string;
   }>;
 
