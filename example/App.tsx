@@ -16,6 +16,8 @@ import {
   AVAudioSessionCategoryOptions,
   AVAudioSessionMode,
   SpeechRecognizerErrorAndroid,
+  SpeechAnalyzerAssetPolicyIOS,
+  TranscriberTypeIOS,
 } from "expo-speech-recognition";
 import type {
   AndroidIntentOptions,
@@ -43,6 +45,7 @@ import { Card } from "./components/ui/Card";
 import { DownloadOfflineModelButton } from "./components/DownloadOfflineModelButton";
 import { TranscribeLocalAudioFileDemo } from "./components/TranscribeLocalAudioFileDemo";
 import { TranscribeRemoteAudioFileDemo } from "./components/TranscribeRemoteAudioFileDemo";
+import { SpeechAnalyzerStatus } from "./components/SpeechAnalyzerStatus";
 
 const speechRecognitionServices =
   ExpoSpeechRecognitionModule.getSpeechRecognitionServices();
@@ -84,6 +87,9 @@ export default function App() {
       enabled: false,
       intervalMillis: 300,
     },
+    iosTranscriberType: "speech",
+    iosForceLegacyEngine: false,
+    iosSpeechAnalyzerAssetPolicy: "auto",
   });
 
   useSpeechRecognitionEvent("result", (ev) => {
@@ -239,6 +245,18 @@ export default function App() {
           </View>
         </Card>
 
+        {Platform.OS === "ios" && (
+          <SpeechAnalyzerStatus
+            locale={settings.lang ?? "en-US"}
+            iosTranscriberType={settings.iosTranscriberType}
+            iosForceLegacyEngine={settings.iosForceLegacyEngine}
+            iosSpeechAnalyzerAssetPolicy={settings.iosSpeechAnalyzerAssetPolicy}
+            addsPunctuation={settings.addsPunctuation}
+            useContextualStrings={useContextualStrings}
+            contextualStrings={contextualStringsValues}
+          />
+        )}
+
         <Card use={ScrollView} contentContainerStyle={{ paddingBottom: 20 }}>
           <Settings
             value={settings}
@@ -376,6 +394,49 @@ function IOSSettings(props: {
 
   return (
     <View style={styles.gap1}>
+      <View style={styles.gap1}>
+        <Text style={styles.textLabel}>SpeechAnalyzer (iOS 26+)</Text>
+        <CheckboxButton
+          title="Force legacy SFSpeechRecognizer"
+          checked={Boolean(settings.iosForceLegacyEngine)}
+          onPress={() =>
+            handleChange("iosForceLegacyEngine", !settings.iosForceLegacyEngine)
+          }
+        />
+        <Text style={styles.textSubtle}>Transcriber type</Text>
+        <View style={[styles.row, styles.flexWrap]}>
+          {Object.keys(TranscriberTypeIOS).map((transcriberType) => (
+            <OptionButton
+              key={transcriberType}
+              title={transcriberType}
+              active={settings.iosTranscriberType === transcriberType}
+              onPress={() =>
+                handleChange(
+                  "iosTranscriberType",
+                  transcriberType as keyof typeof TranscriberTypeIOS,
+                )
+              }
+            />
+          ))}
+        </View>
+        <Text style={styles.textSubtle}>Asset policy</Text>
+        <View style={[styles.row, styles.flexWrap]}>
+          {Object.keys(SpeechAnalyzerAssetPolicyIOS).map((policy) => (
+            <OptionButton
+              key={policy}
+              title={policy}
+              active={settings.iosSpeechAnalyzerAssetPolicy === policy}
+              onPress={() =>
+                handleChange(
+                  "iosSpeechAnalyzerAssetPolicy",
+                  policy as keyof typeof SpeechAnalyzerAssetPolicyIOS,
+                )
+              }
+            />
+          ))}
+        </View>
+      </View>
+
       <View style={styles.gap1}>
         <Text style={styles.textLabel}>Task Hint</Text>
         <View style={[styles.row, styles.flexWrap]}>
