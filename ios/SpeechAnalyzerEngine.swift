@@ -75,6 +75,7 @@ actor SpeechAnalyzerEngine: SpeechRecognitionEngine {
 
   /// Whether this engine instance owns the current locale reservation.
   private var localeReservedByCurrentEngine = false
+  private var reservedLocale: Locale?
 
   /// For volume change events
   @MainActor var volumeChangeHandler: ((Float) -> Void)?
@@ -183,12 +184,24 @@ actor SpeechAnalyzerEngine: SpeechRecognitionEngine {
     stoppedListening = false
 
     do {
+      let useDictation = Self.shouldUseDictation(options)
+      guard let analyzerLocale = await Self.supportedLocaleEquivalent(
+        to: locale,
+        useDictation: useDictation
+      ) else {
+        throw AnalyzerError.localeNotSupported
+      }
+
       // CRITICAL: Reserve locale before using SpeechAnalyzer
       // This is required by Apple's AssetInventory API
-      try await reserveLocaleIfNeeded()
+      try await reserveLocaleIfNeeded(locale: analyzerLocale)
 
       // Create transcriber based on options
-      let activeTranscriber = try await createTranscriber(options: options)
+      let activeTranscriber = try await createTranscriber(
+        options: options,
+        useDictation: useDictation,
+        analyzerLocale: analyzerLocale
+      )
       let analyzerModules: [any SpeechModule]
 
       switch activeTranscriber {
@@ -308,7 +321,7 @@ actor SpeechAnalyzerEngine: SpeechRecognitionEngine {
 
   /// Reserve the locale for use with SpeechAnalyzer
   /// This is REQUIRED by Apple's AssetInventory API before using any transcriber
-  private func reserveLocaleIfNeeded() async throws {
+  private func reserveLocaleIfNeeded(locale: Locale) async throws {
     let reservedLocales = await AssetInventory.reservedLocales
 
     // Check if already reserved
@@ -319,6 +332,7 @@ actor SpeechAnalyzerEngine: SpeechRecognitionEngine {
     if isAlreadyReserved {
       print("[SpeechAnalyzerEngine] Locale \(locale.identifier) already reserved")
       localeReservedByCurrentEngine = false
+      reservedLocale = nil
       return
     }
 
@@ -335,6 +349,7 @@ actor SpeechAnalyzerEngine: SpeechRecognitionEngine {
       let didReserve = try await AssetInventory.reserve(locale: locale)
       if didReserve {
         localeReservedByCurrentEngine = true
+        reservedLocale = locale
         print("[SpeechAnalyzerEngine] Reserved locale: \(locale.identifier)")
         return
       }
@@ -348,6 +363,7 @@ actor SpeechAnalyzerEngine: SpeechRecognitionEngine {
         throw AnalyzerError.localeReservationFailed
       }
       localeReservedByCurrentEngine = false
+      reservedLocale = nil
       print("[SpeechAnalyzerEngine] Locale \(locale.identifier) reserved by another session")
     } catch {
       print("[SpeechAnalyzerEngine] Failed to reserve locale \(locale.identifier): \(error)")
@@ -357,14 +373,15 @@ actor SpeechAnalyzerEngine: SpeechRecognitionEngine {
 
   /// Release the reserved locale on cleanup
   private func releaseLocaleIfNeeded() async {
-    guard localeReservedByCurrentEngine else { return }
+    guard localeReservedByCurrentEngine, let reservedLocale else { return }
 
-    let released = await AssetInventory.release(reservedLocale: locale)
+    let released = await AssetInventory.release(reservedLocale: reservedLocale)
     localeReservedByCurrentEngine = false
+    self.reservedLocale = nil
     if released {
-      print("[SpeechAnalyzerEngine] Released locale reservation: \(locale.identifier)")
+      print("[SpeechAnalyzerEngine] Released locale reservation: \(reservedLocale.identifier)")
     } else {
-      print("[SpeechAnalyzerEngine] Locale reservation already released: \(locale.identifier)")
+      print("[SpeechAnalyzerEngine] Locale reservation already released: \(reservedLocale.identifier)")
     }
   }
 
@@ -390,26 +407,29 @@ actor SpeechAnalyzerEngine: SpeechRecognitionEngine {
     return context
   }
 
-  private func createTranscriber(options: SpeechRecognitionOptions) async throws
+  private static func shouldUseDictation(_ options: SpeechRecognitionOptions) -> Bool {
+    options.iosTranscriberType == .dictation || options.addsPunctuation
+  }
+
+  private static func supportedLocaleEquivalent(to locale: Locale, useDictation: Bool) async
+    -> Locale?
+  {
+    if useDictation {
+      return await DictationTranscriber.supportedLocale(equivalentTo: locale)
+    }
+    return await SpeechTranscriber.supportedLocale(equivalentTo: locale)
+  }
+
+  private func createTranscriber(
+    options: SpeechRecognitionOptions,
+    useDictation: Bool,
+    analyzerLocale: Locale
+  ) async throws
     -> ActiveTranscriber
   {
-    // Determine if we should use dictation mode
-    // DictationTranscriber is preferred for explicit dictation requests and punctuation-heavy flows.
-    let useDictation =
-      options.iosTranscriberType == .dictation
-      || options.addsPunctuation
-
     if useDictation {
-      let supportedLocales = await DictationTranscriber.supportedLocales
-      let isSupported = supportedLocales.contains { supported in
-        Self.localesMatch(supported, locale)
-      }
-
-      guard isSupported else {
-        throw AnalyzerError.localeNotSupported
-      }
-
-      print("[SpeechAnalyzerEngine] Using DictationTranscriber for locale: \(locale.identifier)")
+      print(
+        "[SpeechAnalyzerEngine] Using DictationTranscriber for locale: \(analyzerLocale.identifier)")
 
       var transcriptionOptions: Set<DictationTranscriber.TranscriptionOption> = []
       if options.addsPunctuation || options.iosTranscriberType == .dictation {
@@ -423,7 +443,7 @@ actor SpeechAnalyzerEngine: SpeechRecognitionEngine {
       }
 
       let transcriber = DictationTranscriber(
-        locale: locale,
+        locale: analyzerLocale,
         contentHints: [],
         transcriptionOptions: transcriptionOptions,
         reportingOptions: reportingOptions,
@@ -431,7 +451,8 @@ actor SpeechAnalyzerEngine: SpeechRecognitionEngine {
       )
       return .dictation(transcriber)
     } else {
-      print("[SpeechAnalyzerEngine] Using SpeechTranscriber for locale: \(locale.identifier)")
+      print(
+        "[SpeechAnalyzerEngine] Using SpeechTranscriber for locale: \(analyzerLocale.identifier)")
 
       var reportingOptions: Set<SpeechTranscriber.ReportingOption> =
         options.interimResults ? [.volatileResults] : []
@@ -440,7 +461,7 @@ actor SpeechAnalyzerEngine: SpeechRecognitionEngine {
       }
 
       let transcriber = SpeechTranscriber(
-        locale: locale,
+        locale: analyzerLocale,
         transcriptionOptions: [],
         reportingOptions: reportingOptions,
         attributeOptions: [.audioTimeRange, .transcriptionConfidence]
@@ -1408,24 +1429,23 @@ extension SpeechAnalyzerEngine {
 
   /// Check if assets are installed for a locale
   static func isAssetInstalled(for locale: Locale, useDictation: Bool = false) async -> Bool {
+    guard let equivalentLocale = await supportedLocaleEquivalent(to: locale, useDictation: useDictation)
+    else {
+      return false
+    }
+
     let installed =
       useDictation
       ? await DictationTranscriber.installedLocales
       : await SpeechTranscriber.installedLocales
     return installed.contains { installed in
-      localesMatch(installed, locale)
+      localesMatch(installed, equivalentLocale)
     }
   }
 
   /// Check if a locale is supported
   static func isLocaleSupported(_ locale: Locale, useDictation: Bool = false) async -> Bool {
-    let supported =
-      useDictation
-      ? await DictationTranscriber.supportedLocales
-      : await SpeechTranscriber.supportedLocales
-    return supported.contains { supported in
-      localesMatch(supported, locale)
-    }
+    await supportedLocaleEquivalent(to: locale, useDictation: useDictation) != nil
   }
 
   /// Get all supported locales
