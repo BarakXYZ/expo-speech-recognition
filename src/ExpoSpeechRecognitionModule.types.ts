@@ -745,6 +745,8 @@ export declare class ExpoSpeechRecognitionModuleType extends NativeModule<ExpoSp
   /**
    * Presents a dialog to the user to request permissions for using the microphone.
    *
+   * This is not required when transcribing from `audioSource.uri` only.
+   *
    * For iOS, once a user has granted (or denied) permissions by responding to the original permission request dialog,
    * the only way that the permissions can be changed is by the user themselves using the device settings app.
    */
@@ -755,7 +757,10 @@ export declare class ExpoSpeechRecognitionModuleType extends NativeModule<ExpoSp
   getSpeechRecognizerPermissionsAsync(): Promise<ExpoSpeechRecognitionPermissionResponse>;
   /**
    * [iOS only] Presents a dialog to the user to request permissions for using the speech recognizer.
-   * This permission is required when `requiresOnDeviceRecognition` is disabled (i.e. network-based recognition)
+   *
+   * This permission is required whenever the selected engine is `SFSpeechRecognizer`
+   * (iOS 25 and below, or iOS 26+ fallback/forced-legacy paths).
+   * It is not required for `SpeechAnalyzer`.
    *
    * For iOS, once a user has granted (or denied) permissions by responding to the original permission request dialog,
    * the only way that the permissions can be changed is by the user themselves using the device settings app.

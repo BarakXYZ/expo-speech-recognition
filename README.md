@@ -1126,6 +1126,7 @@ Requests permissions to use the microphone.
 
 - On iOS, this requests [`AVAudioSession.RecordPermission`](https://developer.apple.com/documentation/avfaudio/avaudiosession/recordpermission) permissions.
 - On Android, this requests [`RECORD_AUDIO`](https://developer.android.com/reference/android/Manifest.permission#RECORD_AUDIO) permissions.
+- This is not required when transcribing from `audioSource.uri` only.
 
 ```ts
 ExpoSpeechRecognitionModule.requestMicrophonePermissionsAsync().then(
@@ -1141,18 +1142,26 @@ ExpoSpeechRecognitionModule.requestMicrophonePermissionsAsync().then(
 ### `requestSpeechRecognizerPermissionsAsync()`
 
 > [!NOTE]
-> This is only supported on iOS. Request this permission only if you aren't using on-device recognition.
+> This is only supported on iOS. Request this permission only when the selected engine is `SFSpeechRecognizer`.
 
-Requests [`SFSpeechRecognizer.requestAuthorization()`](https://developer.apple.com/documentation/speech/sfspeechrecognizer/1649892-requestauthorization) permissions before sending voice data across the network to Apple's servers for transcription.
+Requests [`SFSpeechRecognizer.requestAuthorization()`](https://developer.apple.com/documentation/speech/sfspeechrecognizer/1649892-requestauthorization) permissions for legacy/fallback recognition paths.
+
+This is required for:
+- iOS 25 and below
+- iOS 26+ when the engine falls back to `SFSpeechRecognizer` (or when `iosForceLegacyEngine: true`)
+
+This is not required for `SpeechAnalyzer`.
 
 ```ts
 import { Platform } from "react-native";
 import { ExpoSpeechRecognitionModule } from "expo-speech-recognition";
 
-const requiresOnDeviceRecognition = false;
+const preferred = await ExpoSpeechRecognitionModule.getPreferredEngine({
+  locale: "en-US",
+  iosForceLegacyEngine: false,
+});
 
-// We only need this permission when network-based recognition is used on iOS
-if (!requiresOnDeviceRecognition && Platform.OS === "ios") {
+if (Platform.OS === "ios" && preferred.engine === "SFSpeechRecognizer") {
   ExpoSpeechRecognitionModule.requestSpeechRecognizerPermissionsAsync().then(
     (result) => {
       console.log("Status:", result.status); // "granted" | "denied" | "not-determined"
@@ -1197,7 +1206,7 @@ ExpoSpeechRecognitionModule.getMicrophonePermissionsAsync().then((result) => {
 > [!NOTE]
 > This is only supported on iOS.
 
-Checks the current permissions to use network-based recognition for [`SFSpeechRecognizer`](https://developer.apple.com/documentation/speech/sfspeechrecognizer) for iOS.
+Checks the current permissions for [`SFSpeechRecognizer`](https://developer.apple.com/documentation/speech/sfspeechrecognizer) on iOS.
 
 ```ts
 ExpoSpeechRecognitionModule.getSpeechRecognizerPermissionsAsync().then(

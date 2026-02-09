@@ -202,7 +202,7 @@ public class ExpoSpeechRecognitionModule: Module, SpeechRecognitionEngineDelegat
 
           // Check permissions before engine creation to avoid side effects
           // (e.g. triggering asset downloads) when authorization is missing.
-          if !options.requiresOnDeviceRecognition {
+          if await shouldRequireSpeechRecognizerPermission(locale: locale, options: options) {
             guard await SFSpeechRecognizer.hasAuthorizationToRecognize() else {
               sendErrorAndStop(
                 error: "not-allowed",
@@ -212,12 +212,14 @@ public class ExpoSpeechRecognitionModule: Module, SpeechRecognitionEngineDelegat
             }
           }
 
-          guard await AVAudioSession.sharedInstance().hasPermissionToRecord() else {
-            sendErrorAndStop(
-              error: "not-allowed",
-              message: RecognizerError.notPermittedToRecord.message
-            )
-            return
+          if shouldRequireMicrophonePermission(options: options) {
+            guard await AVAudioSession.sharedInstance().hasPermissionToRecord() else {
+              sendErrorAndStop(
+                error: "not-allowed",
+                message: RecognizerError.notPermittedToRecord.message
+              )
+              return
+            }
           }
 
           // Determine whether to recreate the engine
@@ -653,6 +655,28 @@ public class ExpoSpeechRecognitionModule: Module, SpeechRecognitionEngineDelegat
       return false
     }
     return true
+  }
+
+  private func shouldRequireSpeechRecognizerPermission(
+    locale: Locale,
+    options: SpeechRecognitionOptions
+  ) async -> Bool {
+    if #available(iOS 26, *) {
+      let preferredEngine = await SpeechRecognitionEngineFactory.getPreferredEngineAsync(
+        locale: locale,
+        options: options
+      )
+      return preferredEngine.engine == .sfSpeechRecognizer
+    }
+
+    return true
+  }
+
+  private func shouldRequireMicrophonePermission(options: SpeechRecognitionOptions) -> Bool {
+    guard let audioSourceURI = options.audioSource?.uri else {
+      return true
+    }
+    return audioSourceURI.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
   }
 
   private func normalizeLocaleIdentifier(_ localeIdentifier: String) -> String {
