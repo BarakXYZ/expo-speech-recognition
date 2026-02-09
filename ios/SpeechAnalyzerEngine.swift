@@ -427,7 +427,7 @@ actor SpeechAnalyzerEngine: SpeechRecognitionEngine {
         contentHints: [],
         transcriptionOptions: transcriptionOptions,
         reportingOptions: reportingOptions,
-        attributeOptions: [.audioTimeRange]
+        attributeOptions: [.audioTimeRange, .transcriptionConfidence]
       )
       return .dictation(transcriber)
     } else {
@@ -443,7 +443,7 @@ actor SpeechAnalyzerEngine: SpeechRecognitionEngine {
         locale: locale,
         transcriptionOptions: [],
         reportingOptions: reportingOptions,
-        attributeOptions: [.audioTimeRange]
+        attributeOptions: [.audioTimeRange, .transcriptionConfidence]
       )
       return .speech(transcriber)
     }
@@ -638,6 +638,7 @@ actor SpeechAnalyzerEngine: SpeechRecognitionEngine {
   ) async {
     // Extract segments from AttributedString runs if available
     var segments: [UnifiedSegment] = []
+    let transcriptConfidence = Self.computeConfidence(for: attributedText) ?? 1.0
 
     // Try to extract timing information from attributed string runs
     for run in attributedText.runs {
@@ -645,6 +646,7 @@ actor SpeechAnalyzerEngine: SpeechRecognitionEngine {
         let startMillis = CMTimeGetSeconds(timeRange.start) * 1000
         let endMillis = CMTimeGetSeconds(timeRange.end) * 1000
         var segmentText = String(attributedText[run.range].characters)
+        let segmentConfidence = Float(run.transcriptionConfidence ?? Double(transcriptConfidence))
 
         // Strip punctuation from segment if requested
         if stripPunctuation {
@@ -655,7 +657,7 @@ actor SpeechAnalyzerEngine: SpeechRecognitionEngine {
           startTimeMillis: startMillis,
           endTimeMillis: endMillis,
           segment: segmentText,
-          confidence: 1.0  // SpeechAnalyzer doesn't provide per-segment confidence
+          confidence: segmentConfidence
         ))
       }
     }
@@ -675,9 +677,10 @@ actor SpeechAnalyzerEngine: SpeechRecognitionEngine {
         if stripPunctuation {
           alternativeText = Self.removePunctuation(from: alternativeText)
         }
+        let alternativeConfidence = Self.computeConfidence(for: alternative) ?? transcriptConfidence
         return UnifiedAlternative(
           transcript: alternativeText,
-          confidence: 1.0
+          confidence: alternativeConfidence
         )
       }
       .filter { !$0.transcript.isEmpty }
@@ -685,7 +688,7 @@ actor SpeechAnalyzerEngine: SpeechRecognitionEngine {
     // Create a unified result
     let unifiedResult = UnifiedTranscriptionResult(
       transcript: processedText,
-      confidence: 1.0,  // SpeechAnalyzer doesn't provide confidence scores
+      confidence: transcriptConfidence,
       segments: segments,
       isFinal: isFinal,
       alternatives: unifiedAlternatives
@@ -712,6 +715,25 @@ actor SpeechAnalyzerEngine: SpeechRecognitionEngine {
       .trimmingCharacters(in: .whitespaces)
       // Clean up any double spaces that might result from removed punctuation
       .replacingOccurrences(of: "  ", with: " ")
+  }
+
+  private static func computeConfidence(for text: AttributedString) -> Float? {
+    var weightedConfidenceTotal: Float = 0
+    var totalWeight: Float = 0
+
+    for run in text.runs {
+      guard let confidence = run.transcriptionConfidence else { continue }
+      let characterCount = String(text[run.range].characters).count
+      let weight = max(1, characterCount)
+      weightedConfidenceTotal += Float(confidence) * Float(weight)
+      totalWeight += Float(weight)
+    }
+
+    guard totalWeight > 0 else {
+      return nil
+    }
+
+    return weightedConfidenceTotal / totalWeight
   }
 
   // MARK: - Audio Setup
