@@ -55,7 +55,8 @@
         "expo-asset",
         {
           "assets": [
-            "./assets/audio"
+            "./assets/audio",
+            "./assets/test-fixtures/audio"
           ]
         }
       ],

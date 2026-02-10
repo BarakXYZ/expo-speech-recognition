@@ -36,3 +36,48 @@ adb emu avd hostmicon
 
 npm run android:fix-emulator-mic
 ```
+
+## iOS Automation Harness + Maestro
+
+The example app now includes an iOS-only fixture-driven automation harness that validates:
+
+- Legacy engine (`SFSpeechRecognizer`) force path
+- iOS 26 `SpeechAnalyzer` path with contextual strings
+- `maxAlternatives` / confidence / punctuation-stripping invariants
+- `iosSpeechAnalyzerAssetPolicy: "require"` error flow
+- File-source behavior without requiring microphone access
+
+### Fixture source
+
+Fixtures are located at:
+
+- `example/assets/test-fixtures/audio/*`
+
+### Run the iOS automation suite manually in app
+
+1. Open the example app on iOS.
+2. Scroll to the `iOS Automation Harness (Fixture Driven)` card.
+3. Tap `Request iOS Permissions` once.
+4. Tap `Run iOS Automation Suite`.
+5. Wait for:
+   - `IOS_AUTOMATION_STATUS:PASS`
+   - `IOS_AUTOMATION_SUMMARY:PASS` or `PASS_WITH_SKIPS`
+
+### Run with Maestro (default)
+
+```sh
+# From example/
+npm run maestro:ios
+```
+
+### Run with Maestro (microphone denied precondition)
+
+```sh
+# From example/
+npm run maestro:ios:mic-denied
+```
+
+### Notes
+
+- The wrapper script `example/scripts/run-maestro-ios-suite.sh` boots a simulator (if needed) and sets microphone permission via `simctl privacy`.
+- Apple does not expose speech-recognition permission control via `simctl privacy`; on a fresh simulator run, Maestro may need to tap iOS permission dialogs.

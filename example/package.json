@@ -8,7 +8,9 @@
     "ios": "expo run:ios",
     "ios:device": "expo run:ios --device",
     "web": "expo start --web",
-    "android:fix-emulator-mic": "adb emu avd hostmicon"
+    "android:fix-emulator-mic": "adb emu avd hostmicon",
+    "maestro:ios": "bash ./scripts/run-maestro-ios-suite.sh grant .maestro/ios-integration-suite.yaml",
+    "maestro:ios:mic-denied": "bash ./scripts/run-maestro-ios-suite.sh revoke .maestro/ios-mic-denied-file-source.yaml"
   },
   "dependencies": {
     "@expo/metro-runtime": "~6.1.2",

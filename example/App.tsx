@@ -46,6 +46,7 @@ import { DownloadOfflineModelButton } from "./components/DownloadOfflineModelBut
 import { TranscribeLocalAudioFileDemo } from "./components/TranscribeLocalAudioFileDemo";
 import { TranscribeRemoteAudioFileDemo } from "./components/TranscribeRemoteAudioFileDemo";
 import { SpeechAnalyzerStatus } from "./components/SpeechAnalyzerStatus";
+import { IOSIntegrationAutomationHarness } from "./components/IOSIntegrationAutomationHarness";
 
 const speechRecognitionServices =
   ExpoSpeechRecognitionModule.getSpeechRecognitionServices();
@@ -256,6 +257,8 @@ export default function App() {
             contextualStrings={contextualStringsValues}
           />
         )}
+
+        {Platform.OS === "ios" && <IOSIntegrationAutomationHarness />}
 
         <Card use={ScrollView} contentContainerStyle={{ paddingBottom: 20 }}>
           <Settings

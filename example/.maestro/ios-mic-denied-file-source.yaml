@@ -1,0 +1,31 @@
+appId: expo.modules.speechrecognition.example
+---
+- launchApp:
+    clearState: false
+
+- scrollUntilVisible:
+    element:
+      text: Run iOS Automation Suite
+    direction: DOWN
+    timeout: 120000
+
+- tapOn:
+    text: Request iOS Permissions
+    optional: true
+
+- tapOn:
+    text: Allow
+    optional: true
+
+- tapOn:
+    text: OK
+    optional: true
+
+- tapOn: Run iOS Automation Suite
+
+- extendedWaitUntil:
+    visible: IOS_AUTOMATION_SCENARIO:file_source_permission_bypass:PASS
+    timeout: 600000
+
+- assertVisible: IOS_AUTOMATION_STATUS:PASS
+- assertVisible: IOS_AUTOMATION_SCENARIO:file_source_permission_bypass:PASS

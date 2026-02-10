@@ -19,7 +19,9 @@
     "open:android": "open -a \"Android Studio\" example/android",
     "changeset": "changeset",
     "release": "npm run prepare && changeset publish",
-    "ts:check": "tsc -p . --noEmit"
+    "ts:check": "tsc -p . --noEmit",
+    "test:ios:maestro": "npm --prefix example run maestro:ios",
+    "test:ios:maestro:mic-denied": "npm --prefix example run maestro:ios:mic-denied"
   },
   "keywords": [
     "react-native",

@@ -1,0 +1,36 @@
+appId: expo.modules.speechrecognition.example
+---
+- launchApp:
+    clearState: false
+
+- scrollUntilVisible:
+    element:
+      text: Run iOS Automation Suite
+    direction: DOWN
+    timeout: 120000
+
+- tapOn:
+    text: Request iOS Permissions
+    optional: true
+
+- tapOn:
+    text: Allow
+    optional: true
+
+- tapOn:
+    text: OK
+    optional: true
+
+- tapOn: Run iOS Automation Suite
+
+- extendedWaitUntil:
+    visible: IOS_AUTOMATION_STATUS:PASS
+    timeout: 600000
+
+- assertVisible: IOS_AUTOMATION_STATUS:PASS
+- assertVisible: IOS_AUTOMATION_SUMMARY
+- assertNotVisible: IOS_AUTOMATION_SCENARIO:legacy_force_contextual:FAIL
+- assertNotVisible: IOS_AUTOMATION_SCENARIO:ios26_contextual_analyzer:FAIL
+- assertNotVisible: IOS_AUTOMATION_SCENARIO:ios26_alternatives_confidence:FAIL
+- assertNotVisible: IOS_AUTOMATION_SCENARIO:asset_policy_require_missing:FAIL
+- assertNotVisible: IOS_AUTOMATION_SCENARIO:file_source_permission_bypass:FAIL
